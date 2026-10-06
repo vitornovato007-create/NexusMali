@@ -1,0 +1,273 @@
+name: Build NexusMali v0.2
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build NexusMali v0.2 - Android ARM64
+    runs-on: ubuntu-24.04
+
+    env:
+      ANDROID_NDK_VERSION: 29.0.14206865
+      ANDROID_API: 31
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            clang \
+            llvm \
+            lld \
+            meson \
+            ninja-build \
+            python3 \
+            python3-pip \
+            python3-mako \
+            python3-yaml \
+            pkg-config \
+            bison \
+            flex \
+            cmake \
+            git \
+            wget \
+            unzip \
+            xz-utils \
+            zstd
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK r29
+        run: |
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-${ANDROID_API}" \
+            "ndk;${ANDROID_NDK_VERSION}"
+
+      - name: Extract NexusMali source
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          ZIP="$GITHUB_WORKSPACE/NexusMali-v0.2-source.zip"
+
+          if [ ! -f "$ZIP" ]; then
+            echo "ERRO: NexusMali-v0.2-source.zip não encontrado."
+            find "$GITHUB_WORKSPACE" -maxdepth 2 -type f -print
+            exit 1
+          fi
+
+          rm -rf nexusmali-source
+          mkdir -p nexusmali-source
+
+          unzip -q "$ZIP" -d nexusmali-source
+
+          echo "Source extraído:"
+          find nexusmali-source -maxdepth 3 -type f | head -200
+
+      - name: Detect source root
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          ROOT="$(find "$GITHUB_WORKSPACE/nexusmali-source" \
+            -type f \
+            -name 'build.sh' \
+            -exec dirname {} \; | head -1)"
+
+          if [ -z "$ROOT" ]; then
+            echo "ERRO: build.sh não encontrado."
+            find "$GITHUB_WORKSPACE/nexusmali-source" \
+              -type f \
+              -maxdepth 6 \
+              -print
+            exit 1
+          fi
+
+          echo "NEXUSMALI_ROOT=$ROOT" >> "$GITHUB_ENV"
+
+          echo "Source root:"
+          echo "$ROOT"
+
+      - name: Configure Android toolchain
+        run: |
+          NDK="${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}"
+          TOOLCHAIN="${NDK}/toolchains/llvm/prebuilt/linux-x86_64"
+
+          echo "ANDROID_NDK=$NDK" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$NDK" >> "$GITHUB_ENV"
+          echo "TOOLCHAIN=$TOOLCHAIN" >> "$GITHUB_ENV"
+
+          echo "$TOOLCHAIN/bin" >> "$GITHUB_PATH"
+
+          echo "=== clang ==="
+          "$TOOLCHAIN/bin/clang" --version
+
+          echo "=== meson ==="
+          meson --version
+
+          echo "=== ninja ==="
+          ninja --version
+
+      - name: Prepare source
+        run: |
+          set -euxo pipefail
+
+          cd "$NEXUSMALI_ROOT"
+
+          chmod +x build.sh
+
+          echo "=== Source ==="
+          pwd
+
+          echo "=== Files ==="
+          find . -maxdepth 2 -type f -print | sort | head -300
+
+      - name: Build NexusMali
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cd "$NEXUSMALI_ROOT"
+
+          TOOLCHAIN="$TOOLCHAIN"
+
+          export PATH="$TOOLCHAIN/bin:$PATH"
+
+          export CC="$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang"
+          export CXX="$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang++"
+
+          export AR="$TOOLCHAIN/bin/llvm-ar"
+          export NM="$TOOLCHAIN/bin/llvm-nm"
+          export STRIP="$TOOLCHAIN/bin/llvm-strip"
+          export OBJCOPY="$TOOLCHAIN/bin/llvm-objcopy"
+          export RANLIB="$TOOLCHAIN/bin/llvm-ranlib"
+
+          export CFLAGS="--target=aarch64-linux-android${ANDROID_API} -fPIC"
+          export CXXFLAGS="--target=aarch64-linux-android${ANDROID_API} -fPIC"
+
+          echo "CC=$CC"
+          echo "CXX=$CXX"
+
+          ./build.sh
+
+      - name: Find generated Vulkan driver
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          mkdir -p artifact
+
+          DRIVER="$(find "$NEXUSMALI_ROOT" \
+            -type f \
+            -name 'libvulkan_panfrost.so' \
+            -print -quit)"
+
+          if [ -z "$DRIVER" ]; then
+            echo "ERRO: libvulkan_panfrost.so não foi gerado."
+
+            echo "Bibliotecas encontradas:"
+            find "$NEXUSMALI_ROOT" \
+              -type f \
+              -name '*.so' \
+              -print
+
+            exit 1
+          fi
+
+          echo "Driver encontrado:"
+          echo "$DRIVER"
+
+          cp "$DRIVER" artifact/libvulkan_panfrost.so
+
+      - name: Validate ARM64 Vulkan driver
+        run: |
+          set -euxo pipefail
+
+          file artifact/libvulkan_panfrost.so
+
+          echo "=== ELF HEADER ==="
+          readelf -h artifact/libvulkan_panfrost.so
+
+          echo "=== DEPENDENCIES ==="
+          readelf -d artifact/libvulkan_panfrost.so | grep NEEDED || true
+
+          echo "=== SONAME ==="
+          readelf -d artifact/libvulkan_panfrost.so | grep SONAME || true
+
+          echo "=== RUNPATH ==="
+          readelf -d artifact/libvulkan_panfrost.so \
+            | grep -E 'RPATH|RUNPATH' || true
+
+      - name: Create metadata
+        run: |
+          cat > artifact/meta.json <<'EOF'
+          {
+            "schemaVersion": 1,
+            "name": "NexusMali v0.2",
+            "description": "NexusMali PanVK Bifrost/Kbase driver targeting Mali-G76 MP12 on Exynos 9820.",
+            "author": "NexusMali Project",
+            "packageVersion": "0.2",
+            "vendor": "NexusMali / Mesa PanVK",
+            "driverVersion": "26.3.0-devel",
+            "minApi": 31,
+            "libraryName": "libvulkan_panfrost.so",
+            "gpu": "Mali-G76 MP12",
+            "architecture": "Bifrost",
+            "backend": "Kbase",
+            "deviceNode": "/dev/mali0"
+          }
+          EOF
+
+      - name: Copy notices
+        shell: bash
+        run: |
+          if [ -f "$NEXUSMALI_ROOT/NOTICE.txt" ]; then
+            cp "$NEXUSMALI_ROOT/NOTICE.txt" artifact/NOTICE.txt
+          elif [ -f "$NEXUSMALI_ROOT/THIRD_PARTY_NOTICES.md" ]; then
+            cp "$NEXUSMALI_ROOT/THIRD_PARTY_NOTICES.md" artifact/NOTICE.txt
+          fi
+
+      - name: Generate SHA256
+        run: |
+          cd artifact
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create final package
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          mkdir -p dist
+
+          cd artifact
+
+          zip -9 \
+            ../dist/NexusMali-v0.2-android-arm64.zip \
+            libvulkan_panfrost.so \
+            meta.json \
+            SHA256SUMS \
+            $(test -f NOTICE.txt && echo NOTICE.txt || true)
+
+          cd ..
+
+          ls -lh dist/
+
+      - name: Upload compiled NexusMali
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexusMali-v0.2-android-arm64
+          path: dist/NexusMali-v0.2-android-arm64.zip
+          if-no-files-found: error
+          retention-days: 30
