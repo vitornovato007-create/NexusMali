@@ -38,9 +38,6 @@ jobs:
 
       # ============================================================
       # 3. CONFIGURAR ANDROID SDK
-      #
-      # Não instalamos NDK aqui.
-      # A instalação do NDK será feita separadamente pelo sdkmanager.
       # ============================================================
 
       - name: Set up Android SDK
@@ -52,7 +49,7 @@ jobs:
 
 
       # ============================================================
-      # 4. VERIFICAR O ANDROID SDK
+      # 4. VERIFICAR ANDROID SDK
       # ============================================================
 
       - name: Check Android SDK
@@ -61,7 +58,7 @@ jobs:
           set -euxo pipefail
 
           echo "=========================================="
-          echo "ANDROID_HOME"
+          echo "ANDROID HOME"
           echo "=========================================="
 
           echo "${ANDROID_HOME}"
@@ -82,8 +79,7 @@ jobs:
 
 
       # ============================================================
-      # 5. INSTALAR ANDROID PLATFORM API 31
-      #    E NDK r29
+      # 5. INSTALAR ANDROID API 31 E NDK r29
       # ============================================================
 
       - name: Install Android SDK and NDK
@@ -112,14 +108,10 @@ jobs:
           sdkmanager --list_installed
 
           echo "=========================================="
-          echo "NDK"
+          echo "VERIFICANDO NDK"
           echo "=========================================="
 
           ls -lah "${ANDROID_HOME}/ndk/"
-
-          echo "=========================================="
-          echo "NDK ESPERADO"
-          echo "=========================================="
 
           if [ ! -d "${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}" ]; then
             echo "ERRO: NDK ${ANDROID_NDK_VERSION} não foi instalado."
@@ -174,7 +166,7 @@ jobs:
 
 
       # ============================================================
-      # 7. EXTRAIR O SOURCE DO NEXUSMALI
+      # 7. EXTRAIR SOURCE DO NEXUSMALI
       # ============================================================
 
       - name: Extract NexusMali source
@@ -192,7 +184,7 @@ jobs:
             echo "ERRO: NexusMali-v0.2-source.zip não encontrado."
 
             echo ""
-            echo "Arquivos disponíveis no repositório:"
+            echo "Arquivos disponíveis:"
             find "${GITHUB_WORKSPACE}" \
               -maxdepth 3 \
               -type f \
@@ -227,9 +219,7 @@ jobs:
 
 
       # ============================================================
-      # 8. LOCALIZAR A RAIZ REAL DO SOURCE
-      #
-      # Primeiro procura build.sh.
+      # 8. LOCALIZAR RAIZ DO SOURCE
       # ============================================================
 
       - name: Detect source root
@@ -256,11 +246,8 @@ jobs:
             echo ""
             echo "ERRO: build.sh não foi encontrado."
             echo ""
-            echo "Isso significa que o ZIP provavelmente"
-            echo "possui outro sistema de build."
-            echo ""
-            echo "Procurando arquivos de build alternativos:"
-            echo ""
+
+            echo "Arquivos de build encontrados:"
 
             find "$SOURCE" \
               -type f \
@@ -274,6 +261,7 @@ jobs:
 
             echo ""
             echo "Estrutura completa:"
+
             find "$SOURCE" \
               -maxdepth 6 \
               -type f \
@@ -331,7 +319,64 @@ jobs:
 
 
       # ============================================================
-      # 10. CONFIGURAR COMPILADOR ANDROID ARM64
+      # 10. INSTALAR DEPENDÊNCIAS DE BUILD
+      #
+      # glslang-tools é necessário porque o build.sh
+      # utiliza o glslangValidator.
+      # ============================================================
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            build-essential \
+            clang \
+            llvm \
+            lld \
+            meson \
+            ninja-build \
+            python3 \
+            python3-pip \
+            python3-mako \
+            python3-yaml \
+            pkg-config \
+            bison \
+            flex \
+            cmake \
+            git \
+            wget \
+            unzip \
+            xz-utils \
+            zstd \
+            glslang-tools
+
+          echo "=========================================="
+          echo "GLSLANG VALIDATOR"
+          echo "=========================================="
+
+          which glslangValidator
+
+          glslangValidator --version
+
+          echo "=========================================="
+          echo "MESON"
+          echo "=========================================="
+
+          meson --version
+
+          echo "=========================================="
+          echo "NINJA"
+          echo "=========================================="
+
+          ninja --version
+
+
+      # ============================================================
+      # 11. CONFIGURAR COMPILADOR ARM64
       # ============================================================
 
       - name: Configure ARM64 compiler
@@ -366,11 +411,10 @@ jobs:
           echo "RANLIB=${TOOLCHAIN}/bin/llvm-ranlib" >> "$GITHUB_ENV"
 
           echo "CFLAGS=--target=aarch64-linux-android${ANDROID_API} -fPIC" >> "$GITHUB_ENV"
-
           echo "CXXFLAGS=--target=aarch64-linux-android${ANDROID_API} -fPIC" >> "$GITHUB_ENV"
 
           echo "=========================================="
-          echo "COMPILADOR"
+          echo "COMPILADOR ARM64"
           echo "=========================================="
 
           "$CC" --version
@@ -383,52 +427,6 @@ jobs:
           "$CC" \
             --target=aarch64-linux-android${ANDROID_API} \
             -dumpmachine
-
-
-      # ============================================================
-      # 11. INSTALAR DEPENDÊNCIAS DE BUILD
-      # ============================================================
-
-      - name: Install build dependencies
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          sudo apt-get update
-
-          sudo apt-get install -y \
-            build-essential \
-            clang \
-            llvm \
-            lld \
-            meson \
-            ninja-build \
-            python3 \
-            python3-pip \
-            python3-mako \
-            python3-yaml \
-            pkg-config \
-            bison \
-            flex \
-            cmake \
-            git \
-            wget \
-            unzip \
-            xz-utils \
-            zstd
-
-          echo "=========================================="
-          echo "MESON"
-          echo "=========================================="
-
-          meson --version
-
-          echo ""
-          echo "=========================================="
-          echo "NINJA"
-          echo "=========================================="
-
-          ninja --version
 
 
       # ============================================================
@@ -445,7 +443,6 @@ jobs:
           export PATH="${TOOLCHAIN}/bin:${PATH}"
 
           export CC="${TOOLCHAIN}/bin/aarch64-linux-android${ANDROID_API}-clang"
-
           export CXX="${TOOLCHAIN}/bin/aarch64-linux-android${ANDROID_API}-clang++"
 
           export AR="${TOOLCHAIN}/bin/llvm-ar"
@@ -455,7 +452,6 @@ jobs:
           export RANLIB="${TOOLCHAIN}/bin/llvm-ranlib"
 
           export CFLAGS="--target=aarch64-linux-android${ANDROID_API} -fPIC"
-
           export CXXFLAGS="--target=aarch64-linux-android${ANDROID_API} -fPIC"
 
           echo "=========================================="
@@ -469,6 +465,13 @@ jobs:
 
           echo ""
           echo "=========================================="
+          echo "GLSLANG"
+          echo "=========================================="
+
+          glslangValidator --version
+
+          echo ""
+          echo "=========================================="
           echo "EXECUTANDO build.sh"
           echo "=========================================="
 
@@ -476,7 +479,7 @@ jobs:
 
 
       # ============================================================
-      # 13. LOCALIZAR LIBVULKAN_PANFROST.SO
+      # 13. LOCALIZAR DRIVER GERADO
       # ============================================================
 
       - name: Find generated Vulkan driver
@@ -487,7 +490,7 @@ jobs:
           mkdir -p "${GITHUB_WORKSPACE}/artifact"
 
           echo "=========================================="
-          echo "PROCURANDO DRIVER GERADO"
+          echo "PROCURANDO DRIVER"
           echo "=========================================="
 
           DRIVER="$(
@@ -504,6 +507,7 @@ jobs:
 
             echo ""
             echo "Bibliotecas encontradas:"
+
             find "$NEXUSMALI_ROOT" \
               -type f \
               -name '*.so' \
@@ -520,7 +524,7 @@ jobs:
 
 
       # ============================================================
-      # 14. VALIDAR ELF ARM64
+      # 14. VALIDAR DRIVER ARM64
       # ============================================================
 
       - name: Validate ARM64 Vulkan driver
@@ -586,22 +590,22 @@ jobs:
           set -euxo pipefail
 
           cat > "${GITHUB_WORKSPACE}/artifact/meta.json" <<'EOF'
-          {
-            "schemaVersion": 1,
-            "name": "NexusMali v0.2",
-            "description": "NexusMali PanVK Bifrost/Kbase driver targeting Mali-G76 MP12 on Exynos 9820.",
-            "author": "NexusMali Project",
-            "packageVersion": "0.2",
-            "vendor": "NexusMali / Mesa PanVK",
-            "driverVersion": "26.3.0-devel",
-            "minApi": 31,
-            "libraryName": "libvulkan_panfrost.so",
-            "gpu": "Mali-G76 MP12",
-            "architecture": "Bifrost",
-            "backend": "Kbase",
-            "deviceNode": "/dev/mali0"
-          }
-          EOF
+{
+  "schemaVersion": 1,
+  "name": "NexusMali v0.2",
+  "description": "NexusMali PanVK Bifrost/Kbase driver targeting Mali-G76 MP12 on Exynos 9820.",
+  "author": "NexusMali Project",
+  "packageVersion": "0.2",
+  "vendor": "NexusMali / Mesa PanVK",
+  "driverVersion": "26.3.0-devel",
+  "minApi": 31,
+  "libraryName": "libvulkan_panfrost.so",
+  "gpu": "Mali-G76 MP12",
+  "architecture": "Bifrost",
+  "backend": "Kbase",
+  "deviceNode": "/dev/mali0"
+}
+EOF
 
           cat "${GITHUB_WORKSPACE}/artifact/meta.json"
 
@@ -633,7 +637,7 @@ jobs:
 
 
       # ============================================================
-      # 17. SHA256
+      # 17. GERAR SHA256
       # ============================================================
 
       - name: Generate SHA256
@@ -643,9 +647,7 @@ jobs:
 
           cd "${GITHUB_WORKSPACE}/artifact"
 
-          sha256sum \
-            * \
-            > SHA256SUMS
+          sha256sum * > SHA256SUMS
 
           echo "=========================================="
           echo "SHA256"
