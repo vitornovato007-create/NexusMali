@@ -1,4 +1,4 @@
-name: Build NexusMali
+name: Build NexusMali v0.2
 
 on:
   workflow_dispatch:
@@ -8,15 +8,18 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    name: Build NexusMali Android ARM64
+    runs-on: ubuntu-24.04
 
     env:
       ANDROID_API: "31"
       ANDROID_NDK_VERSION: "29.0.14206865"
 
     steps:
-      - name: Baixar repositorio
+
+      - name: Checkout repository
         uses: actions/checkout@v4
+
 
       - name: Configurar Java 17
         uses: actions/setup-java@v6
@@ -24,174 +27,398 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+
       - name: Configurar Android SDK
         uses: android-actions/setup-android@v4
+
 
       - name: Instalar Android SDK e NDK
         run: |
           yes | sdkmanager --licenses || true
+
           sdkmanager "platform-tools"
           sdkmanager "platforms;android-31"
           sdkmanager "ndk;29.0.14206865"
 
-      - name: Instalar dependencias
+
+      - name: Instalar dependencias Linux
         run: |
           sudo apt-get update
+
           sudo apt-get install -y \
             build-essential \
-            cmake \
+            clang \
+            llvm \
+            lld \
             meson \
             ninja-build \
+            cmake \
             pkg-config \
             python3 \
             python3-pip \
             python3-mako \
             python3-yaml \
-            glslang-tools \
-            zip \
+            bison \
+            flex \
+            git \
+            wget \
             unzip \
-            file
+            zip \
+            xz-utils \
+            zstd \
+            glslang-tools
 
-      - name: Preparar toolchain Android
+
+      - name: Verificar ferramentas
         run: |
-          export NDK="$ANDROID_SDK_ROOT/ndk/$ANDROID_NDK_VERSION"
+          echo "=========================================="
+          echo "GLSLANG"
+          echo "=========================================="
 
-          echo "NDK: $NDK"
+          which glslangValidator
+          glslangValidator --version
 
-          test -f "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang"
+          echo ""
+          echo "=========================================="
+          echo "MESON"
+          echo "=========================================="
 
-          echo "ANDROID_NDK=$NDK" >> "$GITHUB_ENV"
-          echo "PATH=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH" >> "$GITHUB_ENV"
+          meson --version
 
-      - name: Localizar source NexusMali
+          echo ""
+          echo "=========================================="
+          echo "NINJA"
+          echo "=========================================="
+
+          ninja --version
+
+
+      - name: Configurar NDK ARM64
         run: |
-          echo "Arquivos encontrados:"
-          find . -maxdepth 4 -type f | head -100
+          NDK="$ANDROID_SDK_ROOT/ndk/$ANDROID_NDK_VERSION"
 
-      - name: Encontrar build.sh
-        run: |
-          BUILD_SCRIPT=$(find . -type f -name "build.sh" -print -quit)
+          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
 
-          if [ -z "$BUILD_SCRIPT" ]; then
-            echo "ERRO: build.sh nao encontrado."
+          CC="$TOOLCHAIN/bin/aarch64-linux-android31-clang"
+          CXX="$TOOLCHAIN/bin/aarch64-linux-android31-clang++"
+
+          if [ ! -x "$CC" ]; then
+            echo "ERRO: compilador ARM64 não encontrado:"
+            echo "$CC"
             exit 1
           fi
 
-          SOURCE_DIR=$(dirname "$BUILD_SCRIPT")
+          if [ ! -x "$CXX" ]; then
+            echo "ERRO: compilador C++ ARM64 não encontrado:"
+            echo "$CXX"
+            exit 1
+          fi
 
-          echo "Build script:"
-          echo "$BUILD_SCRIPT"
+          echo "ANDROID_NDK=$NDK" >> "$GITHUB_ENV"
+          echo "TOOLCHAIN=$TOOLCHAIN" >> "$GITHUB_ENV"
 
+          echo "CC=$CC" >> "$GITHUB_ENV"
+          echo "CXX=$CXX" >> "$GITHUB_ENV"
+
+          echo "AR=$TOOLCHAIN/bin/llvm-ar" >> "$GITHUB_ENV"
+          echo "NM=$TOOLCHAIN/bin/llvm-nm" >> "$GITHUB_ENV"
+          echo "STRIP=$TOOLCHAIN/bin/llvm-strip" >> "$GITHUB_ENV"
+          echo "RANLIB=$TOOLCHAIN/bin/llvm-ranlib" >> "$GITHUB_ENV"
+
+          echo "PATH=$TOOLCHAIN/bin:$PATH" >> "$GITHUB_ENV"
+
+          echo "=========================================="
+          echo "NDK"
+          echo "=========================================="
+
+          echo "$NDK"
+
+          echo ""
+          echo "=========================================="
+          echo "CLANG ARM64"
+          echo "=========================================="
+
+          "$CC" --version
+
+
+      - name: Extrair source NexusMali
+        run: |
+          ZIP="$GITHUB_WORKSPACE/NexusMali-v0.2-source.zip"
+          SOURCE="$GITHUB_WORKSPACE/nexusmali-source"
+
+          if [ ! -f "$ZIP" ]; then
+            echo "ERRO: arquivo NexusMali-v0.2-source.zip não encontrado."
+            exit 1
+          fi
+
+          rm -rf "$SOURCE"
+
+          mkdir -p "$SOURCE"
+
+          unzip -q "$ZIP" -d "$SOURCE"
+
+          echo "=========================================="
+          echo "SOURCE EXTRAÍDO"
+          echo "=========================================="
+
+          find "$SOURCE" -maxdepth 2 -type f -print | sort
+
+
+      - name: Preparar source
+        run: |
+          SOURCE="$GITHUB_WORKSPACE/nexusmali-source"
+
+          echo "=========================================="
+          echo "VERIFICANDO SOURCE"
+          echo "=========================================="
+
+          if [ ! -f "$SOURCE/build.sh" ]; then
+            echo "ERRO: build.sh não encontrado na raiz esperada:"
+            echo "$SOURCE"
+
+            echo ""
+            echo "Arquivos encontrados:"
+            find "$SOURCE" -maxdepth 3 -type f -print | sort
+
+            exit 1
+          fi
+
+          if [ ! -f "$SOURCE/meson.build" ]; then
+            echo "ERRO: meson.build não encontrado."
+            exit 1
+          fi
+
+          chmod +x "$SOURCE/build.sh"
+
+          echo "NEXUSMALI_ROOT=$SOURCE" >> "$GITHUB_ENV"
+
+          echo ""
           echo "Source:"
-          echo "$SOURCE_DIR"
+          echo "$SOURCE"
 
-          echo "NEXUSMALI_ROOT=$SOURCE_DIR" >> "$GITHUB_ENV"
+          echo ""
+          echo "build.sh:"
+          ls -lh "$SOURCE/build.sh"
+
+          echo ""
+          echo "meson.build:"
+          ls -lh "$SOURCE/meson.build"
+
 
       - name: Compilar NexusMali
         working-directory: ${{ env.NEXUSMALI_ROOT }}
         run: |
-          chmod +x build.sh
+          export PATH="$TOOLCHAIN/bin:$PATH"
 
-          export CC="$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang"
-          export CXX="$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang++"
+          export CC="$TOOLCHAIN/bin/aarch64-linux-android31-clang"
+          export CXX="$TOOLCHAIN/bin/aarch64-linux-android31-clang++"
+
+          export AR="$TOOLCHAIN/bin/llvm-ar"
+          export NM="$TOOLCHAIN/bin/llvm-nm"
+          export STRIP="$TOOLCHAIN/bin/llvm-strip"
+          export RANLIB="$TOOLCHAIN/bin/llvm-ranlib"
 
           export ANDROID_API=31
           export ANDROID_NDK_VERSION=29.0.14206865
+
+          export CFLAGS="--target=aarch64-linux-android31 -fPIC"
+          export CXXFLAGS="--target=aarch64-linux-android31 -fPIC"
+
+          echo "=========================================="
+          echo "BUILD NEXUSMALI"
+          echo "=========================================="
 
           echo "CC=$CC"
           echo "CXX=$CXX"
           echo "ANDROID_API=$ANDROID_API"
           echo "ANDROID_NDK_VERSION=$ANDROID_NDK_VERSION"
 
-          echo "glslangValidator:"
-          which glslangValidator
+          echo ""
+          echo "=========================================="
+          echo "GLSLANG"
+          echo "=========================================="
+
           glslangValidator --version
+
+          echo ""
+          echo "=========================================="
+          echo "EXECUTANDO build.sh"
+          echo "=========================================="
 
           ./build.sh
 
-      - name: Localizar driver compilado
+
+      - name: Procurar driver gerado
         run: |
-          DRIVER=$(find "$NEXUSMALI_ROOT" \
+          SOURCE="$GITHUB_WORKSPACE/nexusmali-source"
+
+          mkdir -p "$GITHUB_WORKSPACE/artifact"
+
+          echo "=========================================="
+          echo "PROCURANDO DRIVER"
+          echo "=========================================="
+
+          DRIVER=$(find "$SOURCE" \
             -type f \
             \( \
               -name "libvulkan_panfrost.so" \
               -o -name "vulkan.mt8500.so" \
-              -o -name "libvulkan_freedreno.so" \
             \) \
             -print \
             -quit)
 
           if [ -z "$DRIVER" ]; then
-            echo "ERRO: nenhum driver Vulkan foi encontrado."
+            echo "ERRO: driver Vulkan não foi encontrado."
+
+            echo ""
+            echo "Bibliotecas .so encontradas:"
+
+            find "$SOURCE" \
+              -type f \
+              -name "*.so" \
+              -print \
+              | sort
+
             exit 1
           fi
 
           echo "Driver encontrado:"
           echo "$DRIVER"
 
-          mkdir -p output
-          cp "$DRIVER" output/
+          cp "$DRIVER" \
+            "$GITHUB_WORKSPACE/artifact/libvulkan_panfrost.so"
 
-          echo "DRIVER_PATH=$DRIVER" >> "$GITHUB_ENV"
 
       - name: Validar driver
         run: |
-          echo "Conteudo do output:"
-          ls -lh output
+          DRIVER="$GITHUB_WORKSPACE/artifact/libvulkan_panfrost.so"
 
-          DRIVER=$(find output -type f -name "*.so" -print -quit)
-
-          echo "Validando:"
-          echo "$DRIVER"
+          echo "=========================================="
+          echo "ARQUIVO"
+          echo "=========================================="
 
           file "$DRIVER"
 
-          readelf -h "$DRIVER"
+          echo ""
+          echo "=========================================="
+          echo "ARQUITETURA"
+          echo "=========================================="
 
-          echo "Arquitetura:"
-          readelf -h "$DRIVER" | grep "Class\|Machine"
+          readelf -h "$DRIVER" \
+            | grep -E "Class|Machine"
+
+          echo ""
+          echo "=========================================="
+          echo "DEPENDÊNCIAS"
+          echo "=========================================="
+
+          readelf -d "$DRIVER" \
+            | grep NEEDED || true
+
+          echo ""
+          echo "=========================================="
+          echo "SONAME"
+          echo "=========================================="
+
+          readelf -d "$DRIVER" \
+            | grep SONAME || true
+
+          echo ""
+          echo "=========================================="
+          echo "RUNPATH"
+          echo "=========================================="
+
+          readelf -d "$DRIVER" \
+            | grep -E "RPATH|RUNPATH" || true
+
 
       - name: Criar meta.json
         run: |
-          cat > output/meta.json <<'EOF'
+          cat > "$GITHUB_WORKSPACE/artifact/meta.json" <<'EOF'
           {
             "schemaVersion": 1,
-            "name": "NexusMali G76",
-            "description": "NexusMali Vulkan driver for Mali-G76 Bifrost/Kbase",
-            "author": "NexusMali",
+            "name": "NexusMali v0.2",
+            "description": "NexusMali PanVK Bifrost/Kbase driver targeting Mali-G76 MP12 on Exynos 9820.",
+            "author": "NexusMali Project",
             "packageVersion": "0.2",
-            "vendor": "NexusMali",
-            "driverVersion": "0.2",
+            "vendor": "NexusMali / Mesa PanVK",
+            "driverVersion": "26.3.0-devel",
             "minApi": 31,
-            "libraryName": "libvulkan_panfrost.so"
+            "libraryName": "libvulkan_panfrost.so",
+            "gpu": "Mali-G76 MP12",
+            "architecture": "Bifrost",
+            "backend": "Kbase",
+            "deviceNode": "/dev/mali0"
           }
           EOF
 
-      - name: Criar NOTICE
+          cat "$GITHUB_WORKSPACE/artifact/meta.json"
+
+
+      - name: Copiar NOTICE
         run: |
-          cat > output/NOTICE.txt <<'EOF'
-          NexusMali
+          SOURCE="$GITHUB_WORKSPACE/nexusmali-source"
 
-          Custom Vulkan driver project targeting
-          ARM Mali-G76 Bifrost/Kbase on Android.
+          if [ -f "$SOURCE/THIRD_PARTY_NOTICES.md" ]; then
+            cp "$SOURCE/THIRD_PARTY_NOTICES.md" \
+              "$GITHUB_WORKSPACE/artifact/NOTICE.txt"
+          elif [ -f "$SOURCE/NOTICE.txt" ]; then
+            cp "$SOURCE/NOTICE.txt" \
+              "$GITHUB_WORKSPACE/artifact/NOTICE.txt"
+          else
+            echo "Nenhum NOTICE encontrado."
+          fi
 
-          This build is experimental.
-          EOF
 
       - name: Gerar SHA256
-        working-directory: output
+        working-directory: artifact
         run: |
-          sha256sum *.so meta.json NOTICE.txt > SHA256SUMS
+          sha256sum libvulkan_panfrost.so meta.json > SHA256SUMS
+
+          if [ -f NOTICE.txt ]; then
+            sha256sum NOTICE.txt >> SHA256SUMS
+          fi
+
+          echo "=========================================="
+          echo "SHA256"
+          echo "=========================================="
+
           cat SHA256SUMS
 
-      - name: Criar ZIP
+
+      - name: Criar pacote final
         run: |
-          cd output
-          zip -r ../NexusMali-v0.2.zip .
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+
+          cd "$GITHUB_WORKSPACE/artifact"
+
+          if [ -f NOTICE.txt ]; then
+            zip -9 \
+              "$GITHUB_WORKSPACE/dist/NexusMali-v0.2-android-arm64.zip" \
+              libvulkan_panfrost.so \
+              meta.json \
+              SHA256SUMS \
+              NOTICE.txt
+          else
+            zip -9 \
+              "$GITHUB_WORKSPACE/dist/NexusMali-v0.2-android-arm64.zip" \
+              libvulkan_panfrost.so \
+              meta.json \
+              SHA256SUMS
+          fi
+
+          echo ""
+          echo "=========================================="
+          echo "PACOTE FINAL"
+          echo "=========================================="
+
+          ls -lh "$GITHUB_WORKSPACE/dist/"
+
 
       - name: Enviar artefato
         uses: actions/upload-artifact@v4
         with:
-          name: NexusMali-v0.2
-          path: NexusMali-v0.2.zip
+          name: NexusMali-v0.2-android-arm64
+          path: dist/NexusMali-v0.2-android-arm64.zip
           if-no-files-found: error
+          retention-days: 30
