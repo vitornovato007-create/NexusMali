@@ -1,0 +1,197 @@
+name: Build NexusMali
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    env:
+      ANDROID_API: "31"
+      ANDROID_NDK_VERSION: "29.0.14206865"
+
+    steps:
+      - name: Baixar repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Java 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Configurar Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Instalar Android SDK e NDK
+        run: |
+          yes | sdkmanager --licenses || true
+          sdkmanager "platform-tools"
+          sdkmanager "platforms;android-31"
+          sdkmanager "ndk;29.0.14206865"
+
+      - name: Instalar dependencias
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            meson \
+            ninja-build \
+            pkg-config \
+            python3 \
+            python3-pip \
+            python3-mako \
+            python3-yaml \
+            glslang-tools \
+            zip \
+            unzip \
+            file
+
+      - name: Preparar toolchain Android
+        run: |
+          export NDK="$ANDROID_SDK_ROOT/ndk/$ANDROID_NDK_VERSION"
+
+          echo "NDK: $NDK"
+
+          test -f "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang"
+
+          echo "ANDROID_NDK=$NDK" >> "$GITHUB_ENV"
+          echo "PATH=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH" >> "$GITHUB_ENV"
+
+      - name: Localizar source NexusMali
+        run: |
+          echo "Arquivos encontrados:"
+          find . -maxdepth 4 -type f | head -100
+
+      - name: Encontrar build.sh
+        run: |
+          BUILD_SCRIPT=$(find . -type f -name "build.sh" -print -quit)
+
+          if [ -z "$BUILD_SCRIPT" ]; then
+            echo "ERRO: build.sh nao encontrado."
+            exit 1
+          fi
+
+          SOURCE_DIR=$(dirname "$BUILD_SCRIPT")
+
+          echo "Build script:"
+          echo "$BUILD_SCRIPT"
+
+          echo "Source:"
+          echo "$SOURCE_DIR"
+
+          echo "NEXUSMALI_ROOT=$SOURCE_DIR" >> "$GITHUB_ENV"
+
+      - name: Compilar NexusMali
+        working-directory: ${{ env.NEXUSMALI_ROOT }}
+        run: |
+          chmod +x build.sh
+
+          export CC="$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang"
+          export CXX="$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang++"
+
+          export ANDROID_API=31
+          export ANDROID_NDK_VERSION=29.0.14206865
+
+          echo "CC=$CC"
+          echo "CXX=$CXX"
+          echo "ANDROID_API=$ANDROID_API"
+          echo "ANDROID_NDK_VERSION=$ANDROID_NDK_VERSION"
+
+          echo "glslangValidator:"
+          which glslangValidator
+          glslangValidator --version
+
+          ./build.sh
+
+      - name: Localizar driver compilado
+        run: |
+          DRIVER=$(find "$NEXUSMALI_ROOT" \
+            -type f \
+            \( \
+              -name "libvulkan_panfrost.so" \
+              -o -name "vulkan.mt8500.so" \
+              -o -name "libvulkan_freedreno.so" \
+            \) \
+            -print \
+            -quit)
+
+          if [ -z "$DRIVER" ]; then
+            echo "ERRO: nenhum driver Vulkan foi encontrado."
+            exit 1
+          fi
+
+          echo "Driver encontrado:"
+          echo "$DRIVER"
+
+          mkdir -p output
+          cp "$DRIVER" output/
+
+          echo "DRIVER_PATH=$DRIVER" >> "$GITHUB_ENV"
+
+      - name: Validar driver
+        run: |
+          echo "Conteudo do output:"
+          ls -lh output
+
+          DRIVER=$(find output -type f -name "*.so" -print -quit)
+
+          echo "Validando:"
+          echo "$DRIVER"
+
+          file "$DRIVER"
+
+          readelf -h "$DRIVER"
+
+          echo "Arquitetura:"
+          readelf -h "$DRIVER" | grep "Class\|Machine"
+
+      - name: Criar meta.json
+        run: |
+          cat > output/meta.json <<'EOF'
+          {
+            "schemaVersion": 1,
+            "name": "NexusMali G76",
+            "description": "NexusMali Vulkan driver for Mali-G76 Bifrost/Kbase",
+            "author": "NexusMali",
+            "packageVersion": "0.2",
+            "vendor": "NexusMali",
+            "driverVersion": "0.2",
+            "minApi": 31,
+            "libraryName": "libvulkan_panfrost.so"
+          }
+          EOF
+
+      - name: Criar NOTICE
+        run: |
+          cat > output/NOTICE.txt <<'EOF'
+          NexusMali
+
+          Custom Vulkan driver project targeting
+          ARM Mali-G76 Bifrost/Kbase on Android.
+
+          This build is experimental.
+          EOF
+
+      - name: Gerar SHA256
+        working-directory: output
+        run: |
+          sha256sum *.so meta.json NOTICE.txt > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Criar ZIP
+        run: |
+          cd output
+          zip -r ../NexusMali-v0.2.zip .
+
+      - name: Enviar artefato
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexusMali-v0.2
+          path: NexusMali-v0.2.zip
+          if-no-files-found: error
