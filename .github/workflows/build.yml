@@ -43,8 +43,6 @@ jobs:
             clang \
             llvm \
             lld \
-            meson \
-            ninja-build \
             cmake \
             pkg-config \
             python3 \
@@ -61,6 +59,9 @@ jobs:
             zstd \
             glslang-tools
 
+          python3 -m pip install --user --break-system-packages "meson>=1.4.0"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
       - name: Verificar ferramentas
         run: |
           echo "GLSLANG:"
@@ -68,6 +69,7 @@ jobs:
           glslangValidator --version
 
           echo "MESON:"
+          which meson
           meson --version
 
           echo "NINJA:"
@@ -105,7 +107,6 @@ jobs:
 
           echo "NDK configurado:"
           echo "$NDK"
-
           "$CC" --version
 
       - name: Extrair source NexusMali
@@ -116,7 +117,6 @@ jobs:
           if [ ! -f "$ZIP" ]; then
             echo "ERRO: arquivo ZIP não encontrado:"
             echo "$ZIP"
-            echo "Arquivos disponíveis:"
             find "$GITHUB_WORKSPACE" -maxdepth 3 -type f
             exit 1
           fi
@@ -137,7 +137,6 @@ jobs:
 
           if [ ! -f "$SOURCE/build.sh" ]; then
             echo "ERRO: build.sh não encontrado."
-            echo "Arquivos de build encontrados:"
             find "$GITHUB_WORKSPACE/nexusmali-source" \
               -maxdepth 5 \
               \( -name "build.sh" -o -name "meson.build" \) \
@@ -162,7 +161,7 @@ jobs:
       - name: Compilar NexusMali
         working-directory: ${{ env.NEXUSMALI_ROOT }}
         run: |
-          export PATH="$TOOLCHAIN/bin:$PATH"
+          export PATH="$HOME/.local/bin:$TOOLCHAIN/bin:$PATH"
           export CC="$TOOLCHAIN/bin/aarch64-linux-android31-clang"
           export CXX="$TOOLCHAIN/bin/aarch64-linux-android31-clang++"
           export AR="$TOOLCHAIN/bin/llvm-ar"
@@ -178,7 +177,12 @@ jobs:
           echo "CC=$CC"
           echo "CXX=$CXX"
 
+          echo "Versão do Meson:"
+          meson --version
+
+          echo "Versão do glslangValidator:"
           glslangValidator --version
+
           ./build.sh
 
       - name: Procurar driver gerado
@@ -195,11 +199,6 @@ jobs:
 
             echo "Bibliotecas .so encontradas:"
             find "$SOURCE" -type f -name "*.so" -print | sort
-
-            echo "Arquivos relacionados ao build:"
-            find "$SOURCE" -maxdepth 5 \
-              \( -name "build.ninja" -o -name "meson-private" \) \
-              -print
 
             exit 1
           fi
