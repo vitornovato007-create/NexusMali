@@ -63,7 +63,10 @@ jobs:
             libxshmfence-dev
 
       - name: Configure Android SDK and NDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          accept-android-sdk-licenses: true
+          packages: platform-tools
 
       - name: Install requested Android NDK
         run: |
