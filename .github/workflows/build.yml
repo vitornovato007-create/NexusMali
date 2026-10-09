@@ -1,5 +1,5 @@
 
-name: Build NexusMali v0.2
+name: Build NexusMali v0.2.1-source
 
 on:
   workflow_dispatch:
