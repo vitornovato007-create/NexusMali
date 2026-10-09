@@ -60,7 +60,8 @@ jobs:
             libxcb-dri3-dev \
             libxcb-present-dev \
             libxcb-sync-dev \
-            libxshmfence-dev
+            libxshmfence-dev \
+            libllvmspirvlib-20-dev
 
           python3 -m pip install --user --break-system-packages "meson>=1.4.0"
 
