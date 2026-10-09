@@ -1,4 +1,3 @@
-
 name: Build NexusMali v0.2.1-source
 
 on:
@@ -49,10 +48,6 @@ jobs:
           echo "ANDROID_NDK=${NDK}" >> "$GITHUB_ENV"
           echo "TOOLCHAIN=${TOOLCHAIN}" >> "$GITHUB_ENV"
 
-          # Não adicionamos o NDK ao PATH global.
-          # Isso evita que o LLVM Android seja confundido
-          # com as ferramentas LLVM que executam no Linux.
-
       # ----------------------------------------------------------
       # Dependências nativas do host
       # ----------------------------------------------------------
@@ -96,8 +91,6 @@ jobs:
             zstd \
             glslang-tools
 
-          # Usa uma versão recente do Meson sem depender
-          # da versão antiga que possa vir no Ubuntu.
           python3 -m pip install \
             --user \
             --break-system-packages \
@@ -148,30 +141,24 @@ jobs:
 
           rm -rf "${GITHUB_WORKSPACE}/nexusmali-source"
           mkdir -p "${GITHUB_WORKSPACE}/nexusmali-source"
-
-          unzip -q "$ZIP" \
-            -d "${GITHUB_WORKSPACE}/nexusmali-source"
+          unzip -q "$ZIP" -d "${GITHUB_WORKSPACE}/nexusmali-source"
 
           ROOT="$(
             find "${GITHUB_WORKSPACE}/nexusmali-source" \
               -type f -name build.sh \
               -not -path '*/build-host/*' \
-              -print -quit |
-              xargs -r dirname
+              -print -quit | xargs -r dirname
           )"
 
           if [ -z "$ROOT" ] || [ ! -f "$ROOT/meson.build" ]; then
             echo "ERRO: não foi possível localizar a raiz do Mesa."
-            find "${GITHUB_WORKSPACE}/nexusmali-source" \
-              -maxdepth 6 -type f | sort
+            find "${GITHUB_WORKSPACE}/nexusmali-source" -maxdepth 6 -type f | sort
             exit 1
           fi
 
           echo "Raiz do código-fonte: $ROOT"
           echo "NEXUSMALI_ROOT=$ROOT" >> "$GITHUB_ENV"
-
           chmod +x "$ROOT/build.sh"
-
           test -f "$ROOT/android/package.py"
           test -f "$ROOT/meson.options"
 
@@ -183,17 +170,13 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-
           cd "$NEXUSMALI_ROOT"
 
-          # Mantém as ferramentas do host à frente.
-          # Os compiladores Android são chamados pelo caminho absoluto.
           export PATH="$HOME/.local/bin:/usr/lib/llvm-20/bin:/usr/bin:/bin"
 
           echo "=========================================="
           echo "COMPILADOR HOST"
           echo "=========================================="
-
           command -v llvm-config
           llvm-config --version
           command -v clang
@@ -202,10 +185,8 @@ jobs:
           echo "=========================================="
           echo "COMPILADOR ANDROID"
           echo "=========================================="
-
           echo "$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang"
-          "$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang" \
-            --version
+          "$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang" --version
 
           echo "=========================================="
           echo "INICIANDO BUILD LIMPO"
@@ -219,8 +200,7 @@ jobs:
           echo "=========================================="
           echo "ARQUIVOS GERADOS PELO SCRIPT"
           echo "=========================================="
-
-          find dist -maxdepth 2 -type f -printf '%p (%s bytes)\n' | sort
+          find dist-v0.2.1-experimental -maxdepth 2 -type f -printf '%p (%s bytes)\n' | sort
 
       # ----------------------------------------------------------
       # Validar biblioteca ARM64 e preparar pacote de distribuição
@@ -230,38 +210,35 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-
           cd "$NEXUSMALI_ROOT"
 
-          DRIVER="build-android/src/panfrost/vulkan/libvulkan_panfrost.so"
+          # O build.sh experimental compila nesta pasta e cria uma cópia stripped.
+          DRIVER="build-android-release/libvulkan_panfrost-stripped.so"
 
           if [ ! -s "$DRIVER" ]; then
-            echo "ERRO: biblioteca Vulkan ausente ou vazia."
-            find . -type f -name '*.so' -print
+            echo "ERRO: biblioteca Vulkan stripped ausente ou vazia: $DRIVER"
+            find build-android-release -type f -name '*.so' -print || true
             exit 1
           fi
 
           echo "=========================================="
           echo "ARQUITETURA DA BIBLIOTECA"
           echo "=========================================="
-
           file "$DRIVER"
           readelf -h "$DRIVER"
-
           readelf -h "$DRIVER" | grep -q 'ELF64'
           readelf -h "$DRIVER" | grep -q 'AArch64'
 
           mkdir -p "${GITHUB_WORKSPACE}/artifact"
-          cp "$DRIVER" \
-            "${GITHUB_WORKSPACE}/artifact/libvulkan_panfrost.so"
+          cp "$DRIVER" "${GITHUB_WORKSPACE}/artifact/libvulkan_panfrost.so"
 
-          cat > "${GITHUB_WORKSPACE}/artifact/meta.json" <<'EOF'
+          cat > "${GITHUB_WORKSPACE}/artifact/meta.json" <<'META_EOF'
           {
             "schemaVersion": 1,
-            "name": "NexusMali v0.2.1-source",
+            "name": "NexusMali v0.2.1 experimental",
             "description": "Experimental Mesa PanVK Bifrost/Kbase build targeting Mali-G76 MP12 on Exynos 9820.",
             "author": "NexusMali Project",
-            "packageVersion": "0.2",
+            "packageVersion": "0.2.1-experimental",
             "vendor": "NexusMali / Mesa PanVK",
             "driverVersion": "26.3.0-devel",
             "minApi": 31,
@@ -271,34 +248,31 @@ jobs:
             "backend": "Kbase",
             "deviceNode": "/dev/mali0"
           }
-          EOF
+          META_EOF
 
           if [ -f NOTICE.txt ]; then
             cp NOTICE.txt "${GITHUB_WORKSPACE}/artifact/NOTICE.txt"
           elif [ -f THIRD_PARTY_NOTICES.md ]; then
-            cp THIRD_PARTY_NOTICES.md \
-              "${GITHUB_WORKSPACE}/artifact/NOTICE.txt"
+            cp THIRD_PARTY_NOTICES.md "${GITHUB_WORKSPACE}/artifact/NOTICE.txt"
           fi
 
           cd "${GITHUB_WORKSPACE}/artifact"
           sha256sum libvulkan_panfrost.so meta.json > SHA256SUMS
 
           mkdir -p "${GITHUB_WORKSPACE}/dist"
-
           if [ -f NOTICE.txt ]; then
             zip -9 "${GITHUB_WORKSPACE}/dist/NexusMali-v0.2.1-android-arm64.zip" \
               libvulkan_panfrost.so meta.json SHA256SUMS NOTICE.txt
           else
-            zip -9 "${GITHUB_WORKSPACE}/dist/NexusMali-v0.2-android-arm64.zip" \
+            zip -9 "${GITHUB_WORKSPACE}/dist/NexusMali-v0.2.1-android-arm64.zip" \
               libvulkan_panfrost.so meta.json SHA256SUMS
           fi
 
           echo "=========================================="
           echo "PACOTE FINAL"
           echo "=========================================="
-
           ls -lh "${GITHUB_WORKSPACE}/dist/"
-          unzip -l "${GITHUB_WORKSPACE}/dist/NexusMali-v0.2-android-arm64.zip"
+          unzip -l "${GITHUB_WORKSPACE}/dist/NexusMali-v0.2.1-android-arm64.zip"
 
       # ----------------------------------------------------------
       # Publicar artefato
