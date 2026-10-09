@@ -135,7 +135,7 @@ jobs:
         run: |
           set -Eeuo pipefail
 
-          ZIP="${GITHUB_WORKSPACE}/NexusMali-v0.2-source.zip"
+          ZIP="${GITHUB_WORKSPACE}/NexusMali-v0.2.1-source.zip"
 
           if [ ! -f "$ZIP" ]; then
             echo "ERRO: ZIP não encontrado: $ZIP"
@@ -258,7 +258,7 @@ jobs:
           cat > "${GITHUB_WORKSPACE}/artifact/meta.json" <<'EOF'
           {
             "schemaVersion": 1,
-            "name": "NexusMali v0.2",
+            "name": "NexusMali v0.2.1-source",
             "description": "Experimental Mesa PanVK Bifrost/Kbase build targeting Mali-G76 MP12 on Exynos 9820.",
             "author": "NexusMali Project",
             "packageVersion": "0.2",
@@ -286,7 +286,7 @@ jobs:
           mkdir -p "${GITHUB_WORKSPACE}/dist"
 
           if [ -f NOTICE.txt ]; then
-            zip -9 "${GITHUB_WORKSPACE}/dist/NexusMali-v0.2-android-arm64.zip" \
+            zip -9 "${GITHUB_WORKSPACE}/dist/NexusMali-v0.2.1-android-arm64.zip" \
               libvulkan_panfrost.so meta.json SHA256SUMS NOTICE.txt
           else
             zip -9 "${GITHUB_WORKSPACE}/dist/NexusMali-v0.2-android-arm64.zip" \
@@ -307,7 +307,7 @@ jobs:
       - name: Upload NexusMali package
         uses: actions/upload-artifact@v4
         with:
-          name: NexusMali-v0.2-android-arm64
-          path: dist/NexusMali-v0.2-android-arm64.zip
+          name: NexusMali-v0.2.1-android-arm64
+          path: dist/NexusMali-v0.2.1-android-arm64.zip
           if-no-files-found: error
           retention-days: 30
