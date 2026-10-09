@@ -23,13 +23,17 @@ jobs:
       - name: Install build dependencies
         run: |
           set -Eeuo pipefail
+
           sudo apt-get update
+
           sudo apt-get install -y \
             build-essential \
             clang-20 \
             llvm-20 \
             llvm-20-dev \
             lld-20 \
+            libclang-20-dev \
+            libclang-cpp20-dev \
             meson \
             ninja-build \
             python3 \
@@ -63,7 +67,10 @@ jobs:
             libxshmfence-dev \
             libllvmspirvlib-20-dev
 
-          python3 -m pip install --user --break-system-packages "meson>=1.4.0"
+          python3 -m pip install \
+            --user \
+            --break-system-packages \
+            "meson>=1.4.0"
 
       - name: Configure Android SDK and NDK
         uses: android-actions/setup-android@v4
@@ -74,85 +81,164 @@ jobs:
       - name: Install requested Android NDK
         run: |
           set -Eeuo pipefail
-          sdkmanager "platform-tools" "platforms;android-${ANDROID_API}" "ndk;${ANDROID_NDK_VERSION}"
+
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-${ANDROID_API}" \
+            "ndk;${ANDROID_NDK_VERSION}"
+
           echo "ANDROID_NDK=${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"
+
           echo "TOOLCHAIN=${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64" >> "$GITHUB_ENV"
 
       - name: Verify toolchains
         run: |
           set -Eeuo pipefail
+
           export PATH="$HOME/.local/bin:/usr/lib/llvm-20/bin:/usr/bin:/bin"
+
+          echo "=========================================="
+          echo "VERIFICANDO LLVM"
+          echo "=========================================="
 
           command -v llvm-config
           llvm-config --version
 
+          echo "=========================================="
+          echo "VERIFICANDO CLANG"
+          echo "=========================================="
+
           command -v clang
           clang --version
 
+          echo "=========================================="
+          echo "VERIFICANDO BIBLIOTECAS CLANG"
+          echo "=========================================="
+
+          find /usr/lib/llvm-20 -type f \
+            \( -name 'libclangBasic.a' \
+            -o -name 'libclang-cpp.so*' \
+            -o -name 'libclang-cpp*.a' \) \
+            -print || true
+
+          echo "=========================================="
+          echo "VERIFICANDO MESON"
+          echo "=========================================="
+
           command -v meson
           meson --version
-          python3 -c 'import subprocess; from packaging.version import Version; v=subprocess.check_output(["meson", "--version"], text=True).strip(); print("Meson verificado:", v); assert Version(v) >= Version("1.4.0"), "Meson antigo detectado"'
+
+          python3 -c '
+          import subprocess
+          from packaging.version import Version
+
+          version = subprocess.check_output(
+              ["meson", "--version"],
+              text=True
+          ).strip()
+
+          print("Meson verificado:", version)
+
+          assert Version(version) >= Version("1.4.0"), \
+              "Meson antigo detectado"
+          '
+
+          echo "=========================================="
+          echo "VERIFICANDO COMPILADOR ANDROID"
+          echo "=========================================="
 
           test -x "$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang"
+
           "$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang" --version
 
       - name: Extract source and identify project root
         run: |
           set -Eeuo pipefail
-          test -f "$SOURCE_ZIP" || { echo "ERRO: arquivo $SOURCE_ZIP não encontrado na raiz do repositório."; exit 1; }
+
+          test -f "$SOURCE_ZIP" || {
+            echo "ERRO: arquivo $SOURCE_ZIP não encontrado na raiz do repositório."
+            exit 1
+          }
+
           mkdir -p nexusmali-source
+
           unzip -q -o "$SOURCE_ZIP" -d nexusmali-source
 
-          mapfile -t BUILD_SCRIPTS < <(find "$PWD/nexusmali-source" -type f -name build.sh -print)
+          mapfile -t BUILD_SCRIPTS < <(
+            find "$PWD/nexusmali-source" \
+              -type f \
+              -name build.sh \
+              -print
+          )
+
           if [ "${#BUILD_SCRIPTS[@]}" -ne 1 ]; then
-            echo "ERRO: esperava encontrar exatamente um build.sh; encontrei ${#BUILD_SCRIPTS[@]}:"
+            echo "ERRO: esperava encontrar exatamente um build.sh."
+            echo "Quantidade encontrada: ${#BUILD_SCRIPTS[@]}"
             printf '%s\n' "${BUILD_SCRIPTS[@]}"
             exit 1
           fi
 
           ROOT="$(dirname "${BUILD_SCRIPTS[0]}")"
-          for required in meson.build meson.options android/package.py; do
+
+          for required in \
+            meson.build \
+            meson.options \
+            android/package.py; do
+
             if [ ! -f "$ROOT/$required" ]; then
-              echo "ERRO: $required não encontrado na raiz detectada: $ROOT"
+              echo "ERRO: $required não encontrado."
+              echo "Raiz detectada: $ROOT"
               exit 1
             fi
           done
 
           echo "NEXUSMALI_ROOT=$ROOT" >> "$GITHUB_ENV"
+
           echo "Raiz do projeto: $ROOT"
+
           ls -la "$ROOT"
 
       - name: Build NexusMali for Android ARM64
         run: |
           set -Eeuo pipefail
+
           cd "$NEXUSMALI_ROOT"
+
           export PATH="$HOME/.local/bin:/usr/lib/llvm-20/bin:/usr/bin:/bin"
 
           echo "=========================================="
           echo "CORRIGINDO FINAIS DE LINHA DO build.sh"
           echo "=========================================="
-          # Corrige CRLF (Windows) para LF (Linux), evitando o erro bash\r.
+
+          # Converte finais de linha CRLF para LF.
           sed -i 's/\r$//' build.sh
+
           chmod +x build.sh
+
           head -n 1 build.sh | cat -A
 
           echo "=========================================="
           echo "COMPILADOR HOST"
           echo "=========================================="
+
           command -v llvm-config
           llvm-config --version
+
           command -v clang
           clang --version
 
           echo "=========================================="
           echo "COMPILADOR ANDROID"
           echo "=========================================="
+
           echo "$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang"
+
           "$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang" --version
 
           echo "=========================================="
           echo "INICIANDO BUILD LIMPO"
           echo "=========================================="
+
           CLEAN_BUILD=1 \
           ANDROID_API="$ANDROID_API" \
           ANDROID_NDK="$ANDROID_NDK" \
@@ -161,8 +247,13 @@ jobs:
           echo "=========================================="
           echo "ARQUIVOS GERADOS PELO SCRIPT"
           echo "=========================================="
+
           if [ -d dist-v0.2.1-experimental ]; then
-            find dist-v0.2.1-experimental -maxdepth 2 -type f -printf '%p (%s bytes)\n' | sort
+            find dist-v0.2.1-experimental \
+              -maxdepth 2 \
+              -type f \
+              -printf '%p (%s bytes)\n' \
+              | sort
           else
             echo "Aviso: dist-v0.2.1-experimental não foi criado pelo build.sh."
           fi
@@ -170,25 +261,37 @@ jobs:
       - name: Validate and package release artifact
         run: |
           set -Eeuo pipefail
+
           cd "$NEXUSMALI_ROOT"
 
           DRIVER="build-android-release/libvulkan_panfrost.so"
+
           if [ ! -f "$DRIVER" ]; then
             echo "ERRO: biblioteca não encontrada em $DRIVER"
+
             echo "Arquivos parecidos encontrados:"
-            find build-android-release -type f -name '*panfrost*.so' -print 2>/dev/null || true
+
+            find build-android-release \
+              -type f \
+              -name '*panfrost*.so' \
+              -print 2>/dev/null || true
+
             exit 1
           fi
 
           mkdir -p "$GITHUB_WORKSPACE/artifact"
-          cp "$DRIVER" "$GITHUB_WORKSPACE/artifact/libvulkan_panfrost.so"
+
+          cp "$DRIVER" \
+            "$GITHUB_WORKSPACE/artifact/libvulkan_panfrost.so"
 
           if [ -f NOTICE.txt ]; then
             cp NOTICE.txt "$GITHUB_WORKSPACE/artifact/NOTICE.txt"
           elif [ -f licenses/NOTICE.txt ]; then
             cp licenses/NOTICE.txt "$GITHUB_WORKSPACE/artifact/NOTICE.txt"
           else
-            printf '%s\n' 'NexusMali experimental build. Preserve Mesa and third-party license notices from the source project.' > "$GITHUB_WORKSPACE/artifact/NOTICE.txt"
+            printf '%s\n' \
+              'NexusMali experimental build. Preserve Mesa and third-party license notices from the source project.' \
+              > "$GITHUB_WORKSPACE/artifact/NOTICE.txt"
           fi
 
           cat > "$GITHUB_WORKSPACE/artifact/meta.json" <<META
@@ -205,20 +308,39 @@ jobs:
           META
 
           cd "$GITHUB_WORKSPACE/artifact"
-          sha256sum libvulkan_panfrost.so meta.json NOTICE.txt > SHA256SUMS
+
+          sha256sum \
+            libvulkan_panfrost.so \
+            meta.json \
+            NOTICE.txt \
+            > SHA256SUMS
+
+          echo "=========================================="
+          echo "VERIFICANDO ARQUITETURA DA BIBLIOTECA"
+          echo "=========================================="
+
           file libvulkan_panfrost.so
-          readelf -h libvulkan_panfrost.so | grep -E 'Class:|Machine:'
+
+          readelf -h libvulkan_panfrost.so \
+            | grep -E 'Class:|Machine:'
+
           grep -q 'ELF 64-bit' <(file libvulkan_panfrost.so)
-          readelf -h libvulkan_panfrost.so | grep -q 'AArch64'
+
+          readelf -h libvulkan_panfrost.so \
+            | grep -q 'AArch64'
 
           mkdir -p "$GITHUB_WORKSPACE/dist"
+
           ZIP_OUT="$GITHUB_WORKSPACE/dist/NexusMali-v0.2.1-android-arm64.zip"
+
           zip -q -j "$ZIP_OUT" \
             libvulkan_panfrost.so \
             meta.json \
             NOTICE.txt \
             SHA256SUMS
+
           echo "Pacote criado: $ZIP_OUT"
+
           ls -lh "$ZIP_OUT" libvulkan_panfrost.so
 
       - name: Upload Android ARM64 artifact
