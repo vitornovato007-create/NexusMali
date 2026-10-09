@@ -90,7 +90,7 @@ jobs:
 
           command -v meson
           meson --version
-          python3 -c 'import sys; from packaging.version import Version; assert Version(__import__("mesonbuild").__version__) >= Version("1.4.0"), "Meson antigo detectado"'
+          python3 -c 'import subprocess; from packaging.version import Version; v=subprocess.check_output(["meson", "--version"], text=True).strip(); print("Meson verificado:", v); assert Version(v) >= Version("1.4.0"), "Meson antigo detectado"'
 
           test -x "$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang"
           "$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang" --version
