@@ -213,7 +213,7 @@ jobs:
           cd "$NEXUSMALI_ROOT"
 
           # O build.sh experimental compila nesta pasta e cria uma cópia stripped.
-          DRIVER="build-android-release/libvulkan_panfrost-stripped.so"
+          DRIVER="build-android-release/libvulkan_panfrost.so"
 
           if [ ! -s "$DRIVER" ]; then
             echo "ERRO: biblioteca Vulkan stripped ausente ou vazia: $DRIVER"
