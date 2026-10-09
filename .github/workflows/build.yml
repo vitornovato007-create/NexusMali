@@ -1,3 +1,4 @@
+
 name: Build NexusMali v0.2
 
 on:
@@ -10,6 +11,7 @@ jobs:
   build:
     name: Build NexusMali Android ARM64
     runs-on: ubuntu-24.04
+    timeout-minutes: 120
 
     env:
       ANDROID_API: "31"
@@ -19,36 +21,71 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Configurar Java 17
-        uses: actions/setup-java@v6
-        with:
-          distribution: temurin
-          java-version: "17"
+      # ----------------------------------------------------------
+      # Android SDK e NDK
+      # ----------------------------------------------------------
 
-      - name: Configurar Android SDK
+      - name: Set up Android SDK
         uses: android-actions/setup-android@v4
+        with:
+          packages: "platform-tools"
+          accept-android-sdk-licenses: true
+          log-accepted-android-sdk-licenses: false
 
-      - name: Instalar Android SDK e NDK
+      - name: Install Android platform and NDK
+        shell: bash
         run: |
-          yes | sdkmanager --licenses || true
-          sdkmanager "platform-tools"
-          sdkmanager "platforms;android-31"
-          sdkmanager "ndk;29.0.14206865"
+          set -Eeuo pipefail
 
-      - name: Instalar dependencias Linux
+          sdkmanager "platforms;android-${ANDROID_API}"
+          sdkmanager "ndk;${ANDROID_NDK_VERSION}"
+
+          NDK="${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}"
+          TOOLCHAIN="${NDK}/toolchains/llvm/prebuilt/linux-x86_64"
+
+          test -x "${TOOLCHAIN}/bin/aarch64-linux-android${ANDROID_API}-clang"
+          test -x "${TOOLCHAIN}/bin/llvm-strip"
+
+          echo "ANDROID_NDK=${NDK}" >> "$GITHUB_ENV"
+          echo "TOOLCHAIN=${TOOLCHAIN}" >> "$GITHUB_ENV"
+
+          # Não adicionamos o NDK ao PATH global.
+          # Isso evita que o LLVM Android seja confundido
+          # com as ferramentas LLVM que executam no Linux.
+
+      # ----------------------------------------------------------
+      # Dependências nativas do host
+      # ----------------------------------------------------------
+
+      - name: Install Linux build dependencies
+        shell: bash
         run: |
+          set -Eeuo pipefail
+
           sudo apt-get update
+
           sudo apt-get install -y \
             build-essential \
-            clang \
-            llvm \
-            lld \
+            clang-20 \
+            llvm-20 \
+            llvm-20-dev \
+            llvm-20-tools \
+            libclang-20-dev \
+            libclc-20-dev \
+            libllvmspirvlib-20-dev \
+            llvm-spirv-20 \
+            spirv-tools \
+            spirv-headers \
+            lld-20 \
+            binutils \
             cmake \
-            pkg-config \
+            ninja-build \
             python3 \
             python3-pip \
             python3-mako \
             python3-yaml \
+            python3-packaging \
+            pkg-config \
             bison \
             flex \
             git \
@@ -59,181 +96,170 @@ jobs:
             zstd \
             glslang-tools
 
-          python3 -m pip install --user --break-system-packages "meson>=1.4.0"
+          # Usa uma versão recente do Meson sem depender
+          # da versão antiga que possa vir no Ubuntu.
+          python3 -m pip install \
+            --user \
+            --break-system-packages \
+            "meson==1.12.1"
+
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Verificar ferramentas
-        run: |
-          echo "GLSLANG:"
-          which glslangValidator
-          glslangValidator --version
+          echo "=========================================="
+          echo "VALIDAÇÃO DO LLVM DE HOST"
+          echo "=========================================="
 
-          echo "MESON:"
-          which meson
-          meson --version
+          /usr/lib/llvm-20/bin/llvm-config --version
+          /usr/bin/clang-20 --version
+          /usr/bin/llvm-config-20 --version
+          /usr/bin/llvm-spirv-20 --version || true
 
-          echo "NINJA:"
+          echo "=========================================="
+          echo "VALIDAÇÃO DAS FERRAMENTAS"
+          echo "=========================================="
+
+          python3 --version
           ninja --version
+          glslangValidator --version
+          pkg-config --version
 
-      - name: Configurar NDK ARM64
+          test -x /usr/lib/llvm-20/bin/llvm-config
+          test -d /usr/lib/llvm-20/lib/cmake/llvm
+
+      # ----------------------------------------------------------
+      # Localizar e extrair o ZIP de código-fonte
+      # ----------------------------------------------------------
+
+      - name: Extract NexusMali source
+        shell: bash
         run: |
-          NDK="$ANDROID_SDK_ROOT/ndk/$ANDROID_NDK_VERSION"
-          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
+          set -Eeuo pipefail
 
-          CC="$TOOLCHAIN/bin/aarch64-linux-android31-clang"
-          CXX="$TOOLCHAIN/bin/aarch64-linux-android31-clang++"
-
-          if [ ! -x "$CC" ]; then
-            echo "ERRO: compilador ARM64 não encontrado:"
-            echo "$CC"
-            exit 1
-          fi
-
-          if [ ! -x "$CXX" ]; then
-            echo "ERRO: compilador C++ ARM64 não encontrado:"
-            echo "$CXX"
-            exit 1
-          fi
-
-          echo "ANDROID_NDK=$NDK" >> "$GITHUB_ENV"
-          echo "TOOLCHAIN=$TOOLCHAIN" >> "$GITHUB_ENV"
-          echo "CC=$CC" >> "$GITHUB_ENV"
-          echo "CXX=$CXX" >> "$GITHUB_ENV"
-          echo "AR=$TOOLCHAIN/bin/llvm-ar" >> "$GITHUB_ENV"
-          echo "NM=$TOOLCHAIN/bin/llvm-nm" >> "$GITHUB_ENV"
-          echo "STRIP=$TOOLCHAIN/bin/llvm-strip" >> "$GITHUB_ENV"
-          echo "RANLIB=$TOOLCHAIN/bin/llvm-ranlib" >> "$GITHUB_ENV"
-          echo "PATH=$TOOLCHAIN/bin:$PATH" >> "$GITHUB_ENV"
-
-          echo "NDK configurado:"
-          echo "$NDK"
-          "$CC" --version
-
-      - name: Extrair source NexusMali
-        run: |
-          ZIP="$GITHUB_WORKSPACE/NexusMali-v0.2-source.zip"
-          SOURCE="$GITHUB_WORKSPACE/nexusmali-source"
+          ZIP="${GITHUB_WORKSPACE}/NexusMali-v0.2-source.zip"
 
           if [ ! -f "$ZIP" ]; then
-            echo "ERRO: arquivo ZIP não encontrado:"
-            echo "$ZIP"
+            echo "ERRO: ZIP não encontrado: $ZIP"
             find "$GITHUB_WORKSPACE" -maxdepth 3 -type f
             exit 1
           fi
 
-          rm -rf "$SOURCE"
-          mkdir -p "$SOURCE"
-          unzip -q "$ZIP" -d "$SOURCE"
+          echo "Conteúdo do ZIP:"
+          unzip -l "$ZIP"
 
-          echo "Conteúdo extraído:"
-          find "$SOURCE" -maxdepth 3 -type f | sort | head -200
+          rm -rf "${GITHUB_WORKSPACE}/nexusmali-source"
+          mkdir -p "${GITHUB_WORKSPACE}/nexusmali-source"
 
-      - name: Preparar source
-        run: |
-          SOURCE="$GITHUB_WORKSPACE/nexusmali-source/NexusMali-v0.2-source"
+          unzip -q "$ZIP" \
+            -d "${GITHUB_WORKSPACE}/nexusmali-source"
 
-          echo "Verificando source:"
-          echo "$SOURCE"
+          ROOT="$(
+            find "${GITHUB_WORKSPACE}/nexusmali-source" \
+              -type f -name build.sh \
+              -not -path '*/build-host/*' \
+              -print -quit |
+              xargs -r dirname
+          )"
 
-          if [ ! -f "$SOURCE/build.sh" ]; then
-            echo "ERRO: build.sh não encontrado."
-            find "$GITHUB_WORKSPACE/nexusmali-source" \
-              -maxdepth 5 \
-              \( -name "build.sh" -o -name "meson.build" \) \
-              -print
+          if [ -z "$ROOT" ] || [ ! -f "$ROOT/meson.build" ]; then
+            echo "ERRO: não foi possível localizar a raiz do Mesa."
+            find "${GITHUB_WORKSPACE}/nexusmali-source" \
+              -maxdepth 6 -type f | sort
             exit 1
           fi
 
-          if [ ! -f "$SOURCE/meson.build" ]; then
-            echo "ERRO: meson.build não encontrado."
+          echo "Raiz do código-fonte: $ROOT"
+          echo "NEXUSMALI_ROOT=$ROOT" >> "$GITHUB_ENV"
+
+          chmod +x "$ROOT/build.sh"
+
+          test -f "$ROOT/android/package.py"
+          test -f "$ROOT/meson.options"
+
+      # ----------------------------------------------------------
+      # Compilação
+      # ----------------------------------------------------------
+
+      - name: Build NexusMali
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          cd "$NEXUSMALI_ROOT"
+
+          # Mantém as ferramentas do host à frente.
+          # Os compiladores Android são chamados pelo caminho absoluto.
+          export PATH="$HOME/.local/bin:/usr/lib/llvm-20/bin:/usr/bin:/bin"
+
+          echo "=========================================="
+          echo "COMPILADOR HOST"
+          echo "=========================================="
+
+          command -v llvm-config
+          llvm-config --version
+          command -v clang
+          clang --version
+
+          echo "=========================================="
+          echo "COMPILADOR ANDROID"
+          echo "=========================================="
+
+          echo "$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang"
+          "$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang" \
+            --version
+
+          echo "=========================================="
+          echo "INICIANDO BUILD LIMPO"
+          echo "=========================================="
+
+          CLEAN_BUILD=1 \
+          ANDROID_API="$ANDROID_API" \
+          ANDROID_NDK="$ANDROID_NDK" \
+            ./build.sh "$ANDROID_NDK"
+
+          echo "=========================================="
+          echo "ARQUIVOS GERADOS PELO SCRIPT"
+          echo "=========================================="
+
+          find dist -maxdepth 2 -type f -printf '%p (%s bytes)\n' | sort
+
+      # ----------------------------------------------------------
+      # Validar biblioteca ARM64 e preparar pacote de distribuição
+      # ----------------------------------------------------------
+
+      - name: Validate and package ARM64 driver
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          cd "$NEXUSMALI_ROOT"
+
+          DRIVER="build-android/src/panfrost/vulkan/libvulkan_panfrost.so"
+
+          if [ ! -s "$DRIVER" ]; then
+            echo "ERRO: biblioteca Vulkan ausente ou vazia."
+            find . -type f -name '*.so' -print
             exit 1
           fi
 
-          chmod +x "$SOURCE/build.sh"
-          echo "NEXUSMALI_ROOT=$SOURCE" >> "$GITHUB_ENV"
-
-          echo "build.sh encontrado:"
-          ls -lh "$SOURCE/build.sh"
-
-          echo "meson.build encontrado:"
-          ls -lh "$SOURCE/meson.build"
-
-      - name: Compilar NexusMali
-        working-directory: ${{ env.NEXUSMALI_ROOT }}
-        run: |
-          export PATH="$HOME/.local/bin:$TOOLCHAIN/bin:$PATH"
-          export CC="$TOOLCHAIN/bin/aarch64-linux-android31-clang"
-          export CXX="$TOOLCHAIN/bin/aarch64-linux-android31-clang++"
-          export AR="$TOOLCHAIN/bin/llvm-ar"
-          export NM="$TOOLCHAIN/bin/llvm-nm"
-          export STRIP="$TOOLCHAIN/bin/llvm-strip"
-          export RANLIB="$TOOLCHAIN/bin/llvm-ranlib"
-          export ANDROID_API=31
-          export ANDROID_NDK_VERSION=29.0.14206865
-          export CFLAGS="--target=aarch64-linux-android31 -fPIC"
-          export CXXFLAGS="--target=aarch64-linux-android31 -fPIC"
-
-          echo "Iniciando build NexusMali..."
-          echo "CC=$CC"
-          echo "CXX=$CXX"
-
-          echo "Versão do Meson:"
-          meson --version
-
-          echo "Versão do glslangValidator:"
-          glslangValidator --version
-
-          ./build.sh
-
-      - name: Procurar driver gerado
-        run: |
-          SOURCE="$GITHUB_WORKSPACE/nexusmali-source/NexusMali-v0.2-source"
-          mkdir -p "$GITHUB_WORKSPACE/artifact"
-
-          DRIVER=$(find "$SOURCE" -type f \
-            \( -name "libvulkan_panfrost.so" -o -name "vulkan.mt8500.so" \) \
-            -print -quit)
-
-          if [ -z "$DRIVER" ]; then
-            echo "ERRO: driver Vulkan não encontrado."
-
-            echo "Bibliotecas .so encontradas:"
-            find "$SOURCE" -type f -name "*.so" -print | sort
-
-            exit 1
-          fi
-
-          echo "Driver encontrado:"
-          echo "$DRIVER"
-
-          cp "$DRIVER" \
-            "$GITHUB_WORKSPACE/artifact/libvulkan_panfrost.so"
-
-      - name: Validar driver
-        run: |
-          DRIVER="$GITHUB_WORKSPACE/artifact/libvulkan_panfrost.so"
+          echo "=========================================="
+          echo "ARQUITETURA DA BIBLIOTECA"
+          echo "=========================================="
 
           file "$DRIVER"
+          readelf -h "$DRIVER"
 
-          echo "Arquitetura:"
-          readelf -h "$DRIVER" | grep -E "Class|Machine"
+          readelf -h "$DRIVER" | grep -q 'ELF64'
+          readelf -h "$DRIVER" | grep -q 'AArch64'
 
-          echo "Dependências:"
-          readelf -d "$DRIVER" | grep NEEDED || true
+          mkdir -p "${GITHUB_WORKSPACE}/artifact"
+          cp "$DRIVER" \
+            "${GITHUB_WORKSPACE}/artifact/libvulkan_panfrost.so"
 
-          echo "SONAME:"
-          readelf -d "$DRIVER" | grep SONAME || true
-
-          echo "RUNPATH:"
-          readelf -d "$DRIVER" | grep -E "RPATH|RUNPATH" || true
-
-      - name: Criar meta.json
-        run: |
-          cat > "$GITHUB_WORKSPACE/artifact/meta.json" <<'EOF'
+          cat > "${GITHUB_WORKSPACE}/artifact/meta.json" <<'EOF'
           {
             "schemaVersion": 1,
             "name": "NexusMali v0.2",
-            "description": "Experimental PanVK Bifrost/Kbase driver targeting Mali-G76 MP12.",
+            "description": "Experimental Mesa PanVK Bifrost/Kbase build targeting Mali-G76 MP12 on Exynos 9820.",
             "author": "NexusMali Project",
             "packageVersion": "0.2",
             "vendor": "NexusMali / Mesa PanVK",
@@ -247,47 +273,38 @@ jobs:
           }
           EOF
 
-          cat "$GITHUB_WORKSPACE/artifact/meta.json"
-
-      - name: Copiar NOTICE
-        run: |
-          SOURCE="$GITHUB_WORKSPACE/nexusmali-source/NexusMali-v0.2-source"
-
-          if [ -f "$SOURCE/THIRD_PARTY_NOTICES.md" ]; then
-            cp "$SOURCE/THIRD_PARTY_NOTICES.md" \
-              "$GITHUB_WORKSPACE/artifact/NOTICE.txt"
-          elif [ -f "$SOURCE/android/NOTICE.txt" ]; then
-            cp "$SOURCE/android/NOTICE.txt" \
-              "$GITHUB_WORKSPACE/artifact/NOTICE.txt"
+          if [ -f NOTICE.txt ]; then
+            cp NOTICE.txt "${GITHUB_WORKSPACE}/artifact/NOTICE.txt"
+          elif [ -f THIRD_PARTY_NOTICES.md ]; then
+            cp THIRD_PARTY_NOTICES.md \
+              "${GITHUB_WORKSPACE}/artifact/NOTICE.txt"
           fi
 
-      - name: Gerar SHA256
-        working-directory: artifact
-        run: |
+          cd "${GITHUB_WORKSPACE}/artifact"
           sha256sum libvulkan_panfrost.so meta.json > SHA256SUMS
 
-          if [ -f NOTICE.txt ]; then
-            sha256sum NOTICE.txt >> SHA256SUMS
-          fi
-
-          cat SHA256SUMS
-
-      - name: Criar pacote ZIP
-        run: |
-          mkdir -p "$GITHUB_WORKSPACE/dist"
-          cd "$GITHUB_WORKSPACE/artifact"
+          mkdir -p "${GITHUB_WORKSPACE}/dist"
 
           if [ -f NOTICE.txt ]; then
-            zip -9 "$GITHUB_WORKSPACE/dist/NexusMali-v0.2-android-arm64.zip" \
+            zip -9 "${GITHUB_WORKSPACE}/dist/NexusMali-v0.2-android-arm64.zip" \
               libvulkan_panfrost.so meta.json SHA256SUMS NOTICE.txt
           else
-            zip -9 "$GITHUB_WORKSPACE/dist/NexusMali-v0.2-android-arm64.zip" \
+            zip -9 "${GITHUB_WORKSPACE}/dist/NexusMali-v0.2-android-arm64.zip" \
               libvulkan_panfrost.so meta.json SHA256SUMS
           fi
 
-          ls -lh "$GITHUB_WORKSPACE/dist"
+          echo "=========================================="
+          echo "PACOTE FINAL"
+          echo "=========================================="
 
-      - name: Enviar artefato
+          ls -lh "${GITHUB_WORKSPACE}/dist/"
+          unzip -l "${GITHUB_WORKSPACE}/dist/NexusMali-v0.2-android-arm64.zip"
+
+      # ----------------------------------------------------------
+      # Publicar artefato
+      # ----------------------------------------------------------
+
+      - name: Upload NexusMali package
         uses: actions/upload-artifact@v4
         with:
           name: NexusMali-v0.2-android-arm64
