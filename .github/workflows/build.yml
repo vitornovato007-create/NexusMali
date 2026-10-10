@@ -1,5 +1,6 @@
       # ----------------------------------------------------------
       # NexusMali v0.2
+      # Diagnóstico temporário para a futura v0.2.2
       # ----------------------------------------------------------
 name: Build NexusMali v0.2
 
@@ -52,8 +53,8 @@ jobs:
           echo "TOOLCHAIN=${TOOLCHAIN}" >> "$GITHUB_ENV"
 
           # Não adicionamos o NDK ao PATH global.
-          # Isso evita que o LLVM Android seja confundido
-          # com as ferramentas LLVM que executam no Linux.
+          # Isso evita confundir o LLVM Android com as ferramentas
+          # LLVM que executam no Linux.
 
       # ----------------------------------------------------------
       # Dependências nativas do host
@@ -98,8 +99,8 @@ jobs:
             zstd \
             glslang-tools
 
-          # Usa uma versão recente do Meson sem depender
-          # da versão antiga que possa vir no Ubuntu.
+          # Usa uma versão específica do Meson para manter
+          # a compilação reproduzível.
           python3 -m pip install \
             --user \
             --break-system-packages \
@@ -218,11 +219,86 @@ jobs:
           ANDROID_NDK="$ANDROID_NDK" \
             ./build.sh "$ANDROID_NDK"
 
+          # ------------------------------------------------------
+          # DIAGNÓSTICO TEMPORÁRIO DO CACHE DE SHADERS
+          # Apenas lê as opções do Meson; não altera a compilação.
+          # ------------------------------------------------------
+
+          echo "=========================================="
+          echo "DIAGNOSTICO DO CACHE DE SHADERS"
+          echo "=========================================="
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path.cwd()
+
+          # Procura o arquivo gerado pelo Meson em diretórios
+          # de compilação existentes dentro da raiz da Source.
+          files = sorted(
+              root.glob("**/meson-info/intro-buildoptions.json")
+          )
+
+          # Ignora diretórios comuns que não são a compilação ativa.
+          files = [
+              p for p in files
+              if "build-host" not in p.parts
+              and "nexusmali-source" not in p.parts
+          ]
+
+          if not files:
+              print(
+                  "DIAGNOSTICO: intro-buildoptions.json não encontrado."
+              )
+              print("Raiz pesquisada:", root)
+              print(
+                  "Verifique se o build.sh usa outro diretório "
+                  "de compilação ou remove os metadados ao terminar."
+              )
+          else:
+              for path in files:
+                  print()
+                  print("Arquivo:", path.relative_to(root))
+
+                  try:
+                      options = json.loads(path.read_text())
+                  except (OSError, json.JSONDecodeError) as exc:
+                      print("ERRO ao ler opções:", exc)
+                      continue
+
+                  found = False
+
+                  for option in options:
+                      name = option.get("name", "")
+                      normalized = name.lower().replace("_", "-")
+
+                      if (
+                          "shader-cache" in normalized
+                          or "shader cache" in normalized
+                          or "cache" in normalized
+                      ):
+                          print(
+                              f"{name} = {option.get('value')}"
+                          )
+                          found = True
+
+                  if not found:
+                      print(
+                          "Nenhuma opção com 'cache' no nome "
+                          "foi encontrada."
+                      )
+
+          print()
+          print("Diagnóstico concluído.")
+          PY
+
           echo "=========================================="
           echo "ARQUIVOS GERADOS PELO SCRIPT"
           echo "=========================================="
 
-          find dist -maxdepth 2 -type f -printf '%p (%s bytes)\n' | sort
+          find dist -maxdepth 2 -type f \
+            -printf '%p (%s bytes)\n' | sort
 
       # ----------------------------------------------------------
       # Validar biblioteca ARM64 e preparar pacote de distribuição
@@ -254,6 +330,7 @@ jobs:
           readelf -h "$DRIVER" | grep -q 'AArch64'
 
           mkdir -p "${GITHUB_WORKSPACE}/artifact"
+
           cp "$DRIVER" \
             "${GITHUB_WORKSPACE}/artifact/libvulkan_panfrost.so"
 
@@ -283,6 +360,7 @@ jobs:
           fi
 
           cd "${GITHUB_WORKSPACE}/artifact"
+
           sha256sum libvulkan_panfrost.so meta.json > SHA256SUMS
 
           mkdir -p "${GITHUB_WORKSPACE}/dist"
