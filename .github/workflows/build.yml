@@ -1,8 +1,4 @@
-      # ----------------------------------------------------------
-      # NexusMali v0.2
-      # Diagnóstico detalhado para desenvolvimento da v0.2.2
-      # ----------------------------------------------------------
-name: Build NexusMali v0.2
+name: Build NexusMali - MaliSX2 v0.3.3
 
 on:
   workflow_dispatch:
@@ -12,442 +8,141 @@ permissions:
 
 jobs:
   build:
-    name: Build NexusMali Android ARM64
+    name: Build MaliSX2 Android ARM64
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
-
+    timeout-minutes: 180
     env:
-      ANDROID_API: "31"
-      ANDROID_NDK_VERSION: "29.0.14206865"
+      ANDROID_API: "29"
+      ANDROID_NDK_VERSION: "28.2.13676358"
+      MALISX2_TAG: "v0.3.3"
+      MALISX2_COMMIT: "d0422ed5eb5d8971f118f14d2550ce04aa1a0a5a"
+      MESA_COMMIT: "81113fce01b0e3974cdbb2683449e8619d0639e0"
 
     steps:
-      - name: Checkout repository
+      - name: Checkout NexusMali
         uses: actions/checkout@v4
 
-      # ----------------------------------------------------------
-      # Android SDK e NDK
-      # ----------------------------------------------------------
-
-      - name: Set up Android SDK
+      - name: Install Android SDK and NDK r28c
         uses: android-actions/setup-android@v4
         with:
           packages: "platform-tools"
           accept-android-sdk-licenses: true
-          log-accepted-android-sdk-licenses: false
 
-      - name: Install Android platform and NDK
+      - name: Install build dependencies
         shell: bash
         run: |
           set -Eeuo pipefail
-
-          sdkmanager "platforms;android-${ANDROID_API}"
-          sdkmanager "ndk;${ANDROID_NDK_VERSION}"
-
-          NDK="${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}"
-          TOOLCHAIN="${NDK}/toolchains/llvm/prebuilt/linux-x86_64"
-
-          test -x "${TOOLCHAIN}/bin/aarch64-linux-android${ANDROID_API}-clang"
-          test -x "${TOOLCHAIN}/bin/llvm-strip"
-
-          echo "ANDROID_NDK=${NDK}" >> "$GITHUB_ENV"
-          echo "TOOLCHAIN=${TOOLCHAIN}" >> "$GITHUB_ENV"
-
-          # Não adicionamos o NDK ao PATH global.
-          # Isso evita confundir o LLVM Android com as ferramentas
-          # LLVM que executam no Linux.
-
-      # ----------------------------------------------------------
-      # Dependências nativas do host
-      # ----------------------------------------------------------
-
-      - name: Install Linux build dependencies
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-
           sudo apt-get update
-
           sudo apt-get install -y \
-            build-essential \
-            clang-20 \
-            llvm-20 \
-            llvm-20-dev \
-            llvm-20-tools \
-            libclang-20-dev \
-            libclc-20-dev \
-            libllvmspirvlib-20-dev \
-            llvm-spirv-20 \
-            spirv-tools \
-            spirv-headers \
-            lld-20 \
-            binutils \
-            cmake \
-            ninja-build \
-            python3 \
-            python3-pip \
-            python3-mako \
-            python3-yaml \
-            python3-packaging \
-            pkg-config \
-            bison \
-            flex \
-            git \
-            wget \
-            unzip \
-            zip \
-            xz-utils \
-            zstd \
-            glslang-tools
+            build-essential clang llvm lld libclang-dev \
+            python3 python3-pip python3-venv python3-mako python3-yaml \
+            git curl unzip zip file binutils pkg-config ninja-build
 
-          # Mantém a versão do Meson utilizada na v0.2.
-          python3 -m pip install \
-            --user \
-            --break-system-packages \
-            "meson==1.12.1"
+          sdkmanager "ndk;${ANDROID_NDK_VERSION}"
+          NDK="${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}"
+          test -x "${NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang"
+          echo "ANDROID_NDK=${NDK}" >> "$GITHUB_ENV"
+          echo "TOOLCHAIN=${NDK}/toolchains/llvm/prebuilt/linux-x86_64" >> "$GITHUB_ENV"
 
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
-          echo "=========================================="
-          echo "VALIDAÇÃO DO LLVM DE HOST"
-          echo "=========================================="
-
-          /usr/lib/llvm-20/bin/llvm-config --version
-          /usr/bin/clang-20 --version
-          /usr/bin/llvm-config-20 --version
-          /usr/bin/llvm-spirv-20 --version || true
-
-          echo "=========================================="
-          echo "VALIDAÇÃO DAS FERRAMENTAS"
-          echo "=========================================="
-
-          python3 --version
+      - name: Install Rust, Meson and bindgen
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          source "$HOME/.cargo/env"
+          rustup target add aarch64-linux-android
+          cargo install bindgen-cli --version 0.71.1 --locked
+          python3 -m venv "$HOME/meson-venv"
+          "$HOME/meson-venv/bin/pip" install "meson>=1.7,<2"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          echo "$HOME/meson-venv/bin" >> "$GITHUB_PATH"
+          rustc --version
+          bindgen --version
+          meson --version
           ninja --version
-          glslangValidator --version
-          pkg-config --version
 
-          test -x /usr/lib/llvm-20/bin/llvm-config
-          test -d /usr/lib/llvm-20/lib/cmake/llvm
-
-      # ----------------------------------------------------------
-      # Localizar e extrair o ZIP de código-fonte
-      # ----------------------------------------------------------
-
-      - name: Extract NexusMali source
+      - name: Fetch official MaliSX2 v0.3.3 and pinned Mesa
         shell: bash
         run: |
           set -Eeuo pipefail
+          git clone --depth 1 --branch "${MALISX2_TAG}" https://github.com/bmdhacks/malisx2.git malisx2
+          cd malisx2
+          ACTUAL="$(git rev-parse HEAD)"
+          test "$ACTUAL" = "$MALISX2_COMMIT"
+          git init mesa
+          git -C mesa fetch --depth 1 https://github.com/bmdhacks/armsx2-turnip.git "$MESA_COMMIT"
+          git -C mesa checkout --detach FETCH_HEAD
+          test "$(git -C mesa rev-parse HEAD)" = "$MESA_COMMIT"
+          echo "MaliSX2 commit: $ACTUAL"
+          echo "Mesa commit: $(git -C mesa rev-parse HEAD)"
 
-          ZIP="${GITHUB_WORKSPACE}/NexusMali-v0.2-source.zip"
-
-          if [ ! -f "$ZIP" ]; then
-            echo "ERRO: ZIP não encontrado: $ZIP"
-            find "$GITHUB_WORKSPACE" -maxdepth 3 -type f
-            exit 1
-          fi
-
-          echo "Conteúdo do ZIP:"
-          unzip -l "$ZIP"
-
-          rm -rf "${GITHUB_WORKSPACE}/nexusmali-source"
-          mkdir -p "${GITHUB_WORKSPACE}/nexusmali-source"
-
-          unzip -q "$ZIP" \
-            -d "${GITHUB_WORKSPACE}/nexusmali-source"
-
-          ROOT="$(
-            find "${GITHUB_WORKSPACE}/nexusmali-source" \
-              -type f -name build.sh \
-              -not -path '*/build-host/*' \
-              -print -quit |
-              xargs -r dirname
-          )"
-
-          if [ -z "$ROOT" ] || [ ! -f "$ROOT/meson.build" ]; then
-            echo "ERRO: não foi possível localizar a raiz do Mesa."
-            find "${GITHUB_WORKSPACE}/nexusmali-source" \
-              -maxdepth 6 -type f | sort
-            exit 1
-          fi
-
-          echo "Raiz do código-fonte: $ROOT"
-          echo "NEXUSMALI_ROOT=$ROOT" >> "$GITHUB_ENV"
-
-          chmod +x "$ROOT/build.sh"
-
-          test -f "$ROOT/android/package.py"
-          test -f "$ROOT/meson.options"
-
-      # ----------------------------------------------------------
-      # Compilação e diagnóstico detalhado
-      # ----------------------------------------------------------
-
-      - name: Build NexusMali
+      - name: Configure Android cross build
         shell: bash
         run: |
           set -Eeuo pipefail
+          cd malisx2
+          cat > cross/ci-ndk.ini <<EOF
+          [constants]
+          ndk = '${ANDROID_NDK}'
+          EOF
+          meson setup build-android \
+            --cross-file cross/ci-ndk.ini \
+            --cross-file cross/android-aarch64.ini
+          meson configure build-android
 
-          cd "$NEXUSMALI_ROOT"
-
-          # Mantém as ferramentas do host à frente.
-          # Os compiladores Android são chamados pelo caminho absoluto.
-          export PATH="$HOME/.local/bin:/usr/lib/llvm-20/bin:/usr/bin:/bin"
-
-          echo "=========================================="
-          echo "COMPILADOR HOST"
-          echo "=========================================="
-
-          command -v llvm-config
-          llvm-config --version
-          command -v clang
-          clang --version
-
-          echo "=========================================="
-          echo "COMPILADOR ANDROID"
-          echo "=========================================="
-
-          echo "$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang"
-          "$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang" \
-            --version
-
-          echo "=========================================="
-          echo "INICIANDO BUILD LIMPO"
-          echo "=========================================="
-
-          CLEAN_BUILD=1 \
-          ANDROID_API="$ANDROID_API" \
-          ANDROID_NDK="$ANDROID_NDK" \
-            ./build.sh "$ANDROID_NDK"
-
-          # ------------------------------------------------------
-          # LOG DETALHADO: CACHE DE SHADERS E MESON
-          # Esta seção somente lê arquivos; não modifica o driver.
-          # ------------------------------------------------------
-
-          echo
-          echo "=================================================="
-          echo "==== LOG DETALHADO INICIO ===="
-          echo "=================================================="
-
-          echo
-          echo "[1] RAIZ DA SOURCE"
-          echo "Diretorio atual: $(pwd)"
-          echo "NEXUSMALI_ROOT=$NEXUSMALI_ROOT"
-
-          echo
-          echo "[2] LOCALIZANDO INTRO-BUILDOPTIONS.JSON"
-
-          mapfile -t OPTIONS_FILES < <(
-            find "$NEXUSMALI_ROOT" \
-              -type f \
-              -path '*/meson-info/intro-buildoptions.json' \
-              -print
-          )
-
-          if [ "${#OPTIONS_FILES[@]}" -eq 0 ]; then
-            echo "Nenhum intro-buildoptions.json encontrado."
-          else
-            for OPTIONS_FILE in "${OPTIONS_FILES[@]}"; do
-              echo
-              echo "Arquivo: $OPTIONS_FILE"
-
-              python3 - "$OPTIONS_FILE" <<'PY'
-          import json
-          import sys
-          from pathlib import Path
-
-          path = Path(sys.argv[1])
-
-          try:
-              options = json.loads(path.read_text())
-          except (OSError, json.JSONDecodeError) as exc:
-              print("Erro ao ler o arquivo:", exc)
-              raise SystemExit(0)
-
-          print("--- Opções relacionadas a cache e shaders ---")
-
-          found = False
-
-          for option in options:
-              name = str(option.get("name", ""))
-              description = str(option.get("description", ""))
-              text = f"{name} {description}".lower()
-
-              if "cache" in text or "shader" in text:
-                  print(
-                      f"{name} = {option.get('value')}"
-                  )
-                  if description:
-                      print(f"  descricao: {description}")
-                  found = True
-
-          if not found:
-              print("Nenhuma opção correspondente encontrada.")
-          PY
-            done
-          fi
-
-          echo
-          echo "[3] LOCALIZANDO BUILD.NINJA"
-
-          mapfile -t NINJA_FILES < <(
-            find "$NEXUSMALI_ROOT" \
-              -type f \
-              -name build.ninja \
-              -print
-          )
-
-          if [ "${#NINJA_FILES[@]}" -eq 0 ]; then
-            echo "Nenhum build.ninja encontrado."
-          else
-            printf '%s\n' "${NINJA_FILES[@]}"
-          fi
-
-          echo
-          echo "[4] LOCALIZANDO COREDATA.DAT"
-
-          mapfile -t COREDATA_FILES < <(
-            find "$NEXUSMALI_ROOT" \
-              -type f \
-              -name coredata.dat \
-              -print
-          )
-
-          if [ "${#COREDATA_FILES[@]}" -eq 0 ]; then
-            echo "Nenhum coredata.dat encontrado."
-          else
-            printf '%s\n' "${COREDATA_FILES[@]}"
-          fi
-
-          echo
-          echo "[5] LOCALIZANDO DIRETORIOS MESON-INFO"
-
-          mapfile -t MESON_INFO_DIRS < <(
-            find "$NEXUSMALI_ROOT" \
-              -type d \
-              -name meson-info \
-              -print
-          )
-
-          if [ "${#MESON_INFO_DIRS[@]}" -eq 0 ]; then
-            echo "Nenhum diretorio meson-info encontrado."
-          else
-            printf '%s\n' "${MESON_INFO_DIRS[@]}"
-          fi
-
-          echo
-          echo "[6] DIRETORIOS DE COMPILACAO"
-
-          find "$NEXUSMALI_ROOT" \
-            -maxdepth 4 \
-            -type d \
-            \( -name 'build*' -o -name '*meson*' \) \
-            -print
-
-          echo
-          echo "=================================================="
-          echo "==== LOG DETALHADO FIM ===="
-          echo "=================================================="
-          echo
-
-          echo "=========================================="
-          echo "ARQUIVOS GERADOS PELO SCRIPT"
-          echo "=========================================="
-
-          if [ -d dist ]; then
-            find dist -maxdepth 2 -type f \
-              -printf '%p (%s bytes)\n' | sort
-          else
-            echo "Diretorio dist não encontrado."
-          fi
-
-      # ----------------------------------------------------------
-      # Validar biblioteca ARM64 e preparar pacote de distribuição
-      # ----------------------------------------------------------
-
-      - name: Validate and package ARM64 driver
+      - name: Compile MaliSX2
         shell: bash
         run: |
           set -Eeuo pipefail
+          cd malisx2
+          ninja -C build-android -v
+          DRIVER="build-android/src/libvulkan_malisx2.so"
+          test -s "$DRIVER"
+          "$TOOLCHAIN/bin/llvm-strip" -o libvulkan_malisx2.so "$DRIVER"
+          test -s libvulkan_malisx2.so
 
-          cd "$NEXUSMALI_ROOT"
+      - name: Validate and package NexusMali
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p dist/package
+          cp malisx2/libvulkan_malisx2.so dist/package/
+          file dist/package/libvulkan_malisx2.so
+          readelf -h dist/package/libvulkan_malisx2.so | tee dist/elf-header.txt
+          readelf -h dist/package/libvulkan_malisx2.so | grep -q 'ELF64'
+          readelf -h dist/package/libvulkan_malisx2.so | grep -q 'AArch64'
 
-          DRIVER="build-android/src/panfrost/vulkan/libvulkan_panfrost.so"
-
-          if [ ! -s "$DRIVER" ]; then
-            echo "ERRO: biblioteca Vulkan ausente ou vazia."
-            find . -type f -name '*.so' -print
-            exit 1
-          fi
-
-          echo "=========================================="
-          echo "ARQUITETURA DA BIBLIOTECA"
-          echo "=========================================="
-
-          file "$DRIVER"
-          readelf -h "$DRIVER"
-
-          readelf -h "$DRIVER" | grep -q 'ELF64'
-          readelf -h "$DRIVER" | grep -q 'AArch64'
-
-          mkdir -p "${GITHUB_WORKSPACE}/artifact"
-
-          cp "$DRIVER" \
-            "${GITHUB_WORKSPACE}/artifact/libvulkan_panfrost.so"
-
-          cat > "${GITHUB_WORKSPACE}/artifact/meta.json" <<'EOF'
+          cat > dist/package/meta.json <<'EOF'
           {
             "schemaVersion": 1,
-            "name": "NexusMali v0.2",
-            "description": "Experimental Mesa PanVK Bifrost/Kbase build targeting Mali-G76 MP12 on Exynos 9820.",
+            "name": "NexusMali - MaliSX2",
+            "description": "Experimental Android ARM64 package based on official MaliSX2 v0.3.3.",
             "author": "NexusMali Project",
-            "packageVersion": "0.2",
-            "vendor": "NexusMali / Mesa PanVK",
-            "driverVersion": "26.3.0-devel",
-            "minApi": 31,
-            "libraryName": "libvulkan_panfrost.so",
-            "gpu": "Mali-G76 MP12",
-            "architecture": "Bifrost",
-            "backend": "Kbase",
-            "deviceNode": "/dev/mali0"
+            "packageVersion": "0.3.3-nexus.1",
+            "vendor": "NexusMali / bmdhacks MaliSX2",
+            "driverVersion": "0.3.3",
+            "minApi": 29,
+            "libraryName": "libvulkan_malisx2.so",
+            "gpu": "ARM Mali (device compatibility must be tested)",
+            "backend": "Mali kbase"
           }
           EOF
 
-          if [ -f NOTICE.txt ]; then
-            cp NOTICE.txt "${GITHUB_WORKSPACE}/artifact/NOTICE.txt"
-          elif [ -f THIRD_PARTY_NOTICES.md ]; then
-            cp THIRD_PARTY_NOTICES.md \
-              "${GITHUB_WORKSPACE}/artifact/NOTICE.txt"
-          fi
+          cp malisx2/LICENSE dist/package/MALISX2-LICENSE
+          cp malisx2/README.md dist/package/MALISX2-README.md
+          cd dist/package
+          sha256sum libvulkan_malisx2.so meta.json > SHA256SUMS
+          zip -9 -r ../NexusMali-MaliSX2-v0.3.3-android-arm64.zip .
+          cd ../..
+          ls -lh dist/
+          unzip -l dist/NexusMali-MaliSX2-v0.3.3-android-arm64.zip
 
-          cd "${GITHUB_WORKSPACE}/artifact"
-
-          sha256sum libvulkan_panfrost.so meta.json > SHA256SUMS
-
-          mkdir -p "${GITHUB_WORKSPACE}/dist"
-
-          if [ -f NOTICE.txt ]; then
-            zip -9 "${GITHUB_WORKSPACE}/dist/NexusMali-v0.2-android-arm64.zip" \
-              libvulkan_panfrost.so meta.json SHA256SUMS NOTICE.txt
-          else
-            zip -9 "${GITHUB_WORKSPACE}/dist/NexusMali-v0.2-android-arm64.zip" \
-              libvulkan_panfrost.so meta.json SHA256SUMS
-          fi
-
-          echo "=========================================="
-          echo "PACOTE FINAL"
-          echo "=========================================="
-
-          ls -lh "${GITHUB_WORKSPACE}/dist/"
-          unzip -l "${GITHUB_WORKSPACE}/dist/NexusMali-v0.2-android-arm64.zip"
-
-      # ----------------------------------------------------------
-      # Publicar artefato
-      # ----------------------------------------------------------
-
-      - name: Upload NexusMali package
+      - name: Upload NexusMali package and diagnostics
         uses: actions/upload-artifact@v4
         with:
-          name: NexusMali-v0.2-android-arm64
-          path: dist/NexusMali-v0.2-android-arm64.zip
+          name: NexusMali-MaliSX2-v0.3.3-android-arm64
+          path: |
+            dist/NexusMali-MaliSX2-v0.3.3-android-arm64.zip
+            dist/elf-header.txt
           if-no-files-found: error
           retention-days: 30
