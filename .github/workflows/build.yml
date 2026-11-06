@@ -53,7 +53,7 @@ jobs:
           rustup target add aarch64-linux-android
           cargo install bindgen-cli --version 0.71.1 --locked
           python3 -m venv "$HOME/meson-venv"
-          "$HOME/meson-venv/bin/pip" install "meson>=1.7,<2"
+          "$HOME/meson-venv/bin/pip" install "meson>=1.7,<2" mako PyYAML
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           echo "$HOME/meson-venv/bin" >> "$GITHUB_PATH"
           export PATH="$HOME/meson-venv/bin:$HOME/.cargo/bin:$PATH"
