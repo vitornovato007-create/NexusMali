@@ -87,8 +87,8 @@ jobs:
           ndk = '${ANDROID_NDK}'
           EOF
           meson setup build-android \
-            --cross-file cross/ci-ndk.ini \
-            --cross-file cross/android-aarch64.ini
+            --cross-file cross/android-aarch64.ini \
+            --cross-file cross/ci-ndk.ini
           meson configure build-android
 
       - name: Compile MaliSX2
